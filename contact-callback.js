@@ -1,19 +1,8 @@
 (() => {
-  const CALLBACK_KEY = "tcv_contacts_callback_v1";
-  const NOTICE_KEY = "tcv_contacts_notice_v1";
   const PLAYERS_KEY = "tcv_players_v1";
-
-  const params = new URLSearchParams(location.search);
-  const isContactsCallback = params.has("contactsCallback") || params.has("contactsError");
-
-  if (isContactsCallback) {
-    const payload = {
-      error: params.has("contactsError"),
-      result: params.get("result") || params.get("output") || params.get("shortcutOutput") || params.get("text") || ""
-    };
-    sessionStorage.setItem(CALLBACK_KEY, JSON.stringify(payload));
-    history.replaceState({}, "", `${location.origin}${location.pathname}`);
-  }
+  const PENDING_KEY = "tcv_contacts_pending_v1";
+  const NOTICE_KEY = "tcv_contacts_notice_v2";
+  const CALLBACK_KEY = "tcv_contacts_last_callback_v1";
 
   const normalizePhone = value => {
     let s = String(value ?? "").trim().replace(/[^\d+]/g, "");
@@ -24,12 +13,6 @@
     return s;
   };
 
-  const parseBoolean = value => {
-    if (typeof value === "boolean") return value;
-    const s = String(value ?? "").trim().toLowerCase();
-    return ["true", "1", "yes", "oui", "found", "exists"].includes(s);
-  };
-
   const decodeResult = raw => {
     let value = String(raw ?? "").trim();
     if (!value) return "";
@@ -38,78 +21,97 @@
         const decoded = decodeURIComponent(value);
         if (decoded === value) break;
         value = decoded;
-      } catch {
-        break;
-      }
+      } catch { break; }
     }
     return value.trim();
   };
 
   const saveNotice = (type, message) => {
-    sessionStorage.setItem(NOTICE_KEY, JSON.stringify({ type, message, at: Date.now() }));
+    localStorage.setItem(NOTICE_KEY, JSON.stringify({ type, message, at: Date.now() }));
+  };
+
+  const getPlayers = () => {
+    try {
+      const players = JSON.parse(localStorage.getItem(PLAYERS_KEY) || "[]");
+      return Array.isArray(players) ? players : [];
+    } catch { return []; }
+  };
+
+  const syncTCV = players => {
+    try {
+      if (typeof TCV !== "undefined") {
+        TCV.state.players = players;
+        TCV.route("players");
+      }
+    } catch {}
+  };
+
+  const parseFoundPhones = text => {
+    if (!text) return { none: false, phones: [] };
+    const upper = text.toUpperCase();
+    if (["NONE", "AUCUN", "NO_MATCH", "0_RESULT"].includes(upper)) return { none: true, phones: [] };
+
+    let parsed = null;
+    try { parsed = JSON.parse(text); } catch {}
+
+    if (Array.isArray(parsed)) {
+      const phones = parsed.map(item => {
+        if (typeof item === "string" || typeof item === "number") return normalizePhone(item);
+        if (item && typeof item === "object") return normalizePhone(item.phone || item.telephone || item.number || "");
+        return "";
+      }).filter(Boolean);
+      return { none: false, phones };
+    }
+
+    if (parsed && Array.isArray(parsed.contacts)) {
+      const phones = parsed.contacts.map(item => normalizePhone(item.phone || item.telephone || item.number || item)).filter(Boolean);
+      return { none: false, phones };
+    }
+
+    const phones = text.split(/[\n,;|]+/).map(normalizePhone).filter(Boolean);
+    return { none: false, phones };
   };
 
   const applyResult = raw => {
-    if (typeof TCV === "undefined" || !TCV?.state?.players) return false;
-
-    const players = TCV.state.players;
     const text = decodeResult(raw);
+    const players = getPlayers();
 
     if (!text) {
       saveNotice(
         "warn",
-        "Le raccourci iPhone s'est bien ouvert, mais il n'a renvoyé aucune sortie. Dans Raccourcis, ajoute à la fin l'action « Arrêter ce raccourci et produire un résultat » et renvoie la liste des numéros trouvés."
+        "Le raccourci est revenu vers TCV Assistant, mais aucune sortie n’a été reçue. Vérifie que la dernière action du raccourci est « Arrêter ce raccourci et produire un résultat » avec le texte combiné (ou NONE)."
       );
-      TCV.route("players");
-      return true;
+      syncTCV(players);
+      return;
     }
 
-    if (["NONE", "AUCUN", "NO_MATCH", "0_RESULT"].includes(text.toUpperCase())) {
-      players.forEach(player => {
-        if (player.phone) player.contactStatus = "missing";
-      });
-      localStorage.setItem(PLAYERS_KEY, JSON.stringify(players));
-      saveNotice("success", `Vérification terminée : 0 contact trouvé, ${players.filter(p => p.phone).length} à créer.`);
-      TCV.route("players");
-      return true;
+    if (!players.length) {
+      saveNotice(
+        "warn",
+        `Un résultat a bien été reçu du raccourci (${text.slice(0, 80)}), mais cette page n’a pas accès à la base joueurs. Si le retour s’est ouvert dans Safari, reviens dans l’icône TCV Assistant et relance le test.`
+      );
+      return;
     }
 
-    let parsed = null;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      parsed = null;
-    }
-
+    const parsed = (() => { try { return JSON.parse(text); } catch { return null; } })();
     let found = 0;
     let missing = 0;
 
     if (Array.isArray(parsed) && parsed.some(item => item && typeof item === "object" && "id" in item)) {
-      const byId = new Map(parsed.map(item => [String(item.id), parseBoolean(item.exists)]));
+      const byId = new Map(parsed.map(item => [String(item.id), Boolean(item.exists)]));
       for (const player of players) {
-        if (!byId.has(String(player.id))) continue;
-        const exists = byId.get(String(player.id));
+        if (!player.phone) continue;
+        const has = byId.has(String(player.id));
+        const exists = has ? byId.get(String(player.id)) : false;
         player.contactStatus = exists ? "exists" : "missing";
         exists ? found++ : missing++;
       }
     } else {
-      let phones = [];
-      if (Array.isArray(parsed)) {
-        phones = parsed.map(item => {
-          if (typeof item === "string" || typeof item === "number") return normalizePhone(item);
-          if (item && typeof item === "object") return normalizePhone(item.phone || item.telephone || item.number || "");
-          return "";
-        }).filter(Boolean);
-      } else if (parsed && Array.isArray(parsed.contacts)) {
-        phones = parsed.contacts.map(item => normalizePhone(item.phone || item.telephone || item.number || item)).filter(Boolean);
-      } else {
-        phones = text.split(/[\n,;|]+/).map(normalizePhone).filter(Boolean);
-      }
-
-      const foundPhones = new Set(phones);
+      const { none, phones } = parseFoundPhones(text);
+      const foundPhones = new Set(phones.map(normalizePhone));
       for (const player of players) {
         if (!player.phone) continue;
-        const exists = foundPhones.has(normalizePhone(player.phone));
+        const exists = none ? false : foundPhones.has(normalizePhone(player.phone));
         player.contactStatus = exists ? "exists" : "missing";
         exists ? found++ : missing++;
       }
@@ -117,61 +119,59 @@
 
     localStorage.setItem(PLAYERS_KEY, JSON.stringify(players));
     saveNotice("success", `Vérification terminée : ${found} contact(s) trouvé(s), ${missing} à créer.`);
-    TCV.route("players");
-    return true;
+    syncTCV(players);
   };
 
-  const process = () => {
-    const raw = sessionStorage.getItem(CALLBACK_KEY);
-    if (!raw) return;
-    if (typeof TCV === "undefined") {
-      setTimeout(process, 50);
-      return;
-    }
+  const params = new URLSearchParams(location.search);
+  const isReturn = params.has("contactsCallback") || params.has("contactsError") || params.has("contactsCancel");
 
-    sessionStorage.removeItem(CALLBACK_KEY);
-    try {
-      const payload = JSON.parse(raw);
-      if (payload.error) {
-        saveNotice("warn", "Le raccourci Contacts a signalé une erreur. Vérifie qu'il existe et qu'il porte exactement le nom « TCV - Vérifier contacts ». ");
-        TCV.route("players");
-        return;
+  if (isReturn) {
+    const token = params.get("token") || "";
+    const result = params.get("result") || params.get("output") || params.get("shortcutOutput") || params.get("text") || "";
+    const error = params.has("contactsError");
+    const cancelled = params.has("contactsCancel");
+
+    localStorage.setItem(CALLBACK_KEY, JSON.stringify({ token, at: Date.now(), result, error, cancelled }));
+    localStorage.removeItem(PENDING_KEY);
+    history.replaceState({}, "", `${location.origin}${location.pathname}`);
+
+    setTimeout(() => {
+      if (error) {
+        saveNotice("warn", "Le raccourci a renvoyé une erreur pendant la vérification des contacts.");
+        syncTCV(getPlayers());
+      } else if (cancelled) {
+        saveNotice("warn", "La vérification Contacts a été annulée.");
+        syncTCV(getPlayers());
+      } else {
+        applyResult(result);
       }
-      applyResult(payload.result);
-    } catch (error) {
-      saveNotice("warn", `Impossible de traiter le retour Contacts : ${error.message}`);
-      TCV.route("players");
-    }
-  };
+    }, 50);
+  }
 
   const injectNotice = () => {
-    if (typeof TCV === "undefined") return;
-    const raw = sessionStorage.getItem(NOTICE_KEY);
-    if (!raw) return;
+    let data;
+    try { data = JSON.parse(localStorage.getItem(NOTICE_KEY) || "null"); } catch { data = null; }
+    if (!data) return;
     const view = document.getElementById("view");
     if (!view) return;
-    const playersTitle = [...view.querySelectorAll("h3")].find(node => node.textContent.trim() === "Joueurs");
-    if (!playersTitle || view.querySelector("#contactCallbackNotice")) return;
-
-    try {
-      const noticeData = JSON.parse(raw);
-      const notice = document.createElement("div");
-      notice.id = "contactCallbackNotice";
-      notice.className = noticeData.type === "success" ? "notice success" : "notice warn";
-      notice.style.marginBottom = "12px";
-      notice.innerHTML = `<b>Contacts iPhone</b><br>${String(noticeData.message).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]))}`;
+    const title = [...view.querySelectorAll("h3")].find(el => el.textContent.trim() === "Joueurs");
+    if (!title) return;
+    let box = view.querySelector("#contactsShortcutStatus");
+    if (!box) {
+      box = document.createElement("div");
+      box.id = "contactsShortcutStatus";
       const toolbar = view.querySelector(".toolbar");
-      if (toolbar) toolbar.insertAdjacentElement("afterend", notice);
-      else playersTitle.parentElement.insertAdjacentElement("afterend", notice);
-    } catch {
-      sessionStorage.removeItem(NOTICE_KEY);
+      if (toolbar) toolbar.insertAdjacentElement("afterend", box);
+      else title.parentElement.insertAdjacentElement("afterend", box);
     }
+    box.className = data.type === "success" ? "notice success" : "notice warn";
+    box.style.marginBottom = "12px";
+    box.innerHTML = `<b>Vérification Contacts</b><br>${String(data.message).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]))}`;
   };
 
-  const observer = new MutationObserver(() => requestAnimationFrame(injectNotice));
   const view = document.getElementById("view");
-  if (view) observer.observe(view, { childList: true, subtree: true });
-
-  setTimeout(process, 0);
+  if (view) new MutationObserver(() => requestAnimationFrame(injectNotice)).observe(view, { childList: true, subtree: true });
+  window.addEventListener("pageshow", () => setTimeout(injectNotice, 50));
+  window.addEventListener("focus", () => setTimeout(injectNotice, 50));
   setTimeout(injectNotice, 100);
 })();
