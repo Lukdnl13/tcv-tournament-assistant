@@ -1,6 +1,6 @@
-const CACHE = "tcv-assistant-v4";
+const CACHE = "tcv-assistant-v5";
 const ASSETS = [
-  "./","index.html","styles.css","app.js","excel-import.js","moja-ui.js","manifest.webmanifest",
+  "./","index.html","styles.css","app.js","contact-callback.js","excel-import.js","moja-ui.js","manifest.webmanifest",
   "assets/tcv-logo.png","assets/icons/icon-192.png"
 ];
 
