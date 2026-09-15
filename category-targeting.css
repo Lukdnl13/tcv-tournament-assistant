@@ -1,0 +1,8 @@
+.category-presets{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+.category-campaign-form .audience-preset{min-height:50px;padding:10px 12px}
+.category-campaign-form .audience-note{grid-column:1/-1;margin-top:0}
+.category-result-card .row{align-items:flex-start}
+.category-result-meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;margin-bottom:5px}
+.category-result-card .eligibleCheck{width:22px;height:22px;accent-color:#0B4F8A;flex:0 0 auto;margin-top:14px}
+.category-actions{display:grid;gap:8px}
+@media(max-width:430px){.category-presets{grid-template-columns:1fr 1fr!important}.category-campaign-form .audience-preset{font-size:13px}.category-result-card .row{gap:10px}}
