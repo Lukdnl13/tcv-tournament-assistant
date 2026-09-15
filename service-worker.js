@@ -1,8 +1,7 @@
-
-const CACHE = "tcv-assistant-v1";
+const CACHE = "tcv-assistant-v2";
 const ASSETS = [
-  "./","index.html","styles.css","app.js","manifest.webmanifest",
-  "assets/tcv-logo.png","assets/icons/icon-192.png","assets/icons/icon-512.png"
+  "./","index.html","styles.css","app.js","excel-import.js","manifest.webmanifest",
+  "assets/tcv-logo.png","assets/icons/icon-192.png"
 ];
 
 self.addEventListener("install", event => {
