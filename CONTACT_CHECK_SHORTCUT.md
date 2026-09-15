@@ -1,14 +1,48 @@
 # Raccourci iPhone — TCV - Vérifier contacts
 
-Ce raccourci reçoit depuis la PWA un JSON contenant les joueurs à vérifier :
+La PWA ouvre ce raccourci avec une liste JSON de joueurs contenant notamment leur `id`, leur nom et leur numéro normalisé en `+33...`.
 
-```json
-[
-  {"id":"...","firstName":"Lucas","lastName":"DANIEL","phone":"+33782565405","category":"Senior"}
-]
+## Sortie recommandée du raccourci
+
+La méthode la plus simple est de renvoyer uniquement les **numéros qui existent déjà dans Contacts**, un numéro par ligne.
+
+Exemple :
+
+```text
++33782565405
++33612345678
 ```
 
-Le raccourci doit rechercher chaque numéro dans Contacts et retourner un JSON texte de la forme :
+La PWA compare ensuite cette liste avec tous les joueurs importés :
+
+- numéro présent dans la sortie → `✓ Dans Contacts`
+- numéro absent → `À créer`
+
+Si aucun numéro n'est trouvé, retourner exactement :
+
+```text
+NONE
+```
+
+## Logique à construire dans Raccourcis
+
+1. Nommer le raccourci exactement `TCV - Vérifier contacts`.
+2. Recevoir l'entrée du raccourci en texte.
+3. Convertir l'entrée JSON en liste / dictionnaire.
+4. Répéter pour chaque joueur.
+5. Récupérer la valeur `phone`.
+6. Utiliser **Rechercher des contacts** avec le numéro de téléphone.
+7. Si au moins un contact est trouvé, ajouter le numéro à une variable/liste `Numéros trouvés`.
+8. À la fin :
+   - si la liste est vide, utiliser le texte `NONE` ;
+   - sinon, combiner `Numéros trouvés` avec un saut de ligne.
+9. **Étape indispensable : ajouter l'action `Arrêter ce raccourci et produire un résultat` et lui donner ce texte comme résultat.**
+
+Sans cette dernière action, l'iPhone revient bien vers la PWA mais ne lui transmet rien, ce qui provoque le message « le raccourci n'a retourné aucun résultat ».
+
+## Formats également acceptés
+
+La PWA accepte aussi un JSON de la forme :
 
 ```json
 [
@@ -17,20 +51,4 @@ Le raccourci doit rechercher chaque numéro dans Contacts et retourner un JSON t
 ]
 ```
 
-## Logique à construire dans Raccourcis
-
-1. Recevoir l'entrée du raccourci en texte.
-2. Utiliser **Obtenir le dictionnaire à partir de l'entrée** / l'action de décodage JSON disponible sur iOS.
-3. Répéter pour chaque élément de la liste.
-4. Récupérer `phone` et `id`.
-5. Utiliser **Rechercher des contacts** en filtrant sur le numéro de téléphone.
-6. Tester si au moins un contact a été trouvé.
-7. Ajouter à une liste résultat un dictionnaire avec `id` et `exists` (`true` ou `false`).
-8. À la fin, convertir la liste résultat en JSON/texte.
-9. Faire de ce texte la sortie finale du raccourci.
-
-Nom exact du raccourci :
-
-`TCV - Vérifier contacts`
-
-La PWA utilise x-callback-url : à la fin du raccourci, iOS revient automatiquement dans TCV Tournament Assistant avec le résultat, puis l'application affiche `✓ Contact` ou `À créer`.
+ou une liste JSON de numéros.
