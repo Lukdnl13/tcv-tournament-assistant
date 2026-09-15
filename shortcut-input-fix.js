@@ -1,5 +1,6 @@
 (() => {
   const SHORTCUT_NAME = "TCV - Vérifier contacts";
+  const PLAYERS_KEY = "tcv_players_v1";
 
   const normalizePhone = value => {
     let s = String(value ?? "").trim().replace(/[^\d+]/g, "");
@@ -10,17 +11,31 @@
     return s;
   };
 
+  const getPlayers = () => {
+    try {
+      if (typeof TCV !== "undefined" && Array.isArray(TCV?.state?.players)) {
+        return TCV.state.players;
+      }
+    } catch {}
+
+    try {
+      const stored = JSON.parse(localStorage.getItem(PLAYERS_KEY) || "[]");
+      return Array.isArray(stored) ? stored : [];
+    } catch {
+      return [];
+    }
+  };
+
   const runShortcut = () => {
-    const players = Array.isArray(window.TCV?.state?.players) ? window.TCV.state.players : [];
+    const players = getPlayers();
     if (!players.length) {
-      alert("Importe d'abord la liste des joueurs MOJA.");
+      alert("Aucun joueur n'est chargé. Importe d'abord la liste des joueurs MOJA, puis réessaie.");
       return;
     }
 
-    // Shortcuts' “Obtenir le dictionnaire de l’entrée” expects a JSON object,
-    // not a top-level JSON array.  We therefore send one dictionary where
-    // each key is the player's id and each value is the player's dictionary.
-    // The existing Shortcut can keep using “Répéter avec chaque élément dans Valeurs”.
+    // Shortcuts “Obtenir le dictionnaire de l’entrée” attend un objet JSON.
+    // Chaque valeur du dictionnaire correspond à un joueur ; le raccourci peut
+    // continuer à utiliser “Répéter avec chaque élément dans Valeurs”.
     const payload = {};
     for (const player of players) {
       if (!player.phone) continue;
@@ -32,6 +47,11 @@
         category: player.category,
         phone: normalizePhone(player.phone)
       };
+    }
+
+    if (!Object.keys(payload).length) {
+      alert("Aucun numéro de téléphone exploitable n'a été trouvé dans la liste importée.");
+      return;
     }
 
     const baseUrl = `${location.origin}${location.pathname}`;
@@ -48,12 +68,21 @@
 
   const replaceCheckButton = () => {
     const button = document.querySelector("[data-action='checkIphoneContacts']");
-    if (!button || button.dataset.dictionaryPayload === "1") return;
+    if (!button) return;
 
-    // Cloning removes the previous click listener defined by excel-import.js.
+    if (button.dataset.dictionaryPayload === "1") {
+      // Le bouton reste toujours cliquable. La fonction affiche un message si
+      // aucun joueur n'est chargé au lieu de laisser un bouton grisé.
+      button.disabled = false;
+      return;
+    }
+
+    // Le clone retire l'ancien listener défini par excel-import.js afin que
+    // seule la version dictionnaire soit envoyée au raccourci.
     const replacement = button.cloneNode(true);
     replacement.dataset.dictionaryPayload = "1";
-    replacement.disabled = !(window.TCV?.state?.players?.length);
+    replacement.disabled = false;
+    replacement.removeAttribute("disabled");
     replacement.addEventListener("click", event => {
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -69,5 +98,7 @@
   }
 
   window.addEventListener("pageshow", replaceCheckButton);
+  window.addEventListener("focus", replaceCheckButton);
   setTimeout(replaceCheckButton, 0);
+  setTimeout(replaceCheckButton, 500);
 })();
