@@ -1,560 +1,693 @@
-
-const TCV = (() => {
+const App = (() => {
   const KEYS = {
-    players: "tcv_players_v1",
-    campaigns: "tcv_campaigns_v1",
-    history: "tcv_history_v1",
-    settings: "tcv_settings_v1"
+    players: 'tcv_players_v1',
+    campaigns: 'tcv_campaigns_v1',
+    history: 'tcv_history_v1',
+    settings: 'tcv_settings_v1',
+    verifyStatus: 'tcv_verify_status_v1',
+    pendingShortcut: 'tcv_pending_shortcut_v3'
   };
 
   const state = {
-    route: "home",
+    route: 'home',
     players: load(KEYS.players, []),
     campaigns: load(KEYS.campaigns, []),
     history: load(KEYS.history, []),
     settings: load(KEYS.settings, {
-      contactsShortcut: "TCV - Créer contacts",
-      messagesShortcut: "TCV - Envoyer messages"
+      contactsShortcut: 'TCV - Créer contacts',
+      verifyShortcut: 'TCV - Vérifier contacts',
+      messagesShortcut: 'TCV - Envoyer messages'
     }),
-    campaignSelection: new Set(),
+    verifyStatus: load(KEYS.verifyStatus, null),
+    audienceQuick: 'all',
     currentEligible: [],
-    deferredInstall: null
+    campaignSelection: new Set(),
+    deferredInstall: null,
+    isBusy: false
   };
 
-  function load(key, fallback) {
+  const $ = (sel) => document.querySelector(sel);
+  const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+
+  function load(k, fallback) {
     try {
-      const raw = localStorage.getItem(key);
+      const raw = localStorage.getItem(k);
       return raw ? JSON.parse(raw) : fallback;
     } catch {
       return fallback;
     }
   }
-  function save(key, value) {
-    localStorage.setItem(key, JSON.stringify(value));
-  }
 
-  function esc(s="") {
-    return String(s).replace(/[&<>"']/g, c => ({
-      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
-    }[c]));
+  function save(k, v) {
+    localStorage.setItem(k, JSON.stringify(v));
   }
 
   function uid() {
-    return (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
+    return (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`).replaceAll('.', '');
   }
 
-  function initials(p) {
-    return `${(p.firstName||"")[0]||""}${(p.lastName||"")[0]||""}`.toUpperCase();
+  function esc(v = '') {
+    return String(v).replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[m]));
   }
 
-  function normalizePhone(raw="") {
-    let s = String(raw).trim().replace(/[^\d+]/g, "");
-    if (s.startsWith("0033")) s = "+33" + s.slice(4);
-    if (s.startsWith("0") && s.length >= 10) s = "+33" + s.slice(1);
-    if (/^33\d+/.test(s)) s = "+" + s;
+  function normalizePhone(raw = '') {
+    let s = String(raw).trim().replace(/[^\d+]/g, '');
+    if (s.startsWith('0033')) s = '+33' + s.slice(4);
+    if (s.startsWith('0') && s.length >= 10) s = '+33' + s.slice(1);
+    if (/^33\d+$/.test(s)) s = '+' + s;
     return s;
   }
 
-  function parseDate(raw="") {
-    const s = String(raw).trim();
-    if (!s) return "";
-    const fr = s.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/);
-    if (fr) {
-      const d = new Date(Date.UTC(+fr[3], +fr[2]-1, +fr[1]));
-      return isNaN(d) ? "" : d.toISOString().slice(0,10);
-    }
-    const iso = /^\d{4}-\d{2}-\d{2}$/.test(s);
-    return iso ? s : "";
+  function initials(p) {
+    return `${(p.firstName || '')[0] || ''}${(p.lastName || '')[0] || ''}`.toUpperCase();
   }
 
-  function ageFromBirthDate(iso) {
-    if (!iso) return null;
-    const b = new Date(iso + "T00:00:00Z");
-    if (isNaN(b)) return null;
-    const now = new Date();
-    let age = now.getUTCFullYear() - b.getUTCFullYear();
-    const m = now.getUTCMonth() - b.getUTCMonth();
-    if (m < 0 || (m === 0 && now.getUTCDate() < b.getUTCDate())) age--;
-    return age >= 0 && age < 120 ? age : null;
+  function toast(msg, ms = 2500) {
+    const el = $('#toast');
+    el.textContent = msg;
+    el.classList.remove('hidden');
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => el.classList.add('hidden'), ms);
   }
 
-  function genderNorm(v="") {
-    const s = String(v).trim().toLowerCase();
-    if (["f","femme","fille","female"].includes(s)) return "F";
-    if (["h","m","homme","garçon","garcon","male"].includes(s)) return "H";
-    return "";
+  function showOverlay(title, text, closable = false) {
+    $('#overlayTitle').textContent = title;
+    $('#overlayText').textContent = text;
+    $('#overlayCloseBtn').classList.toggle('hidden', !closable);
+    $('#shortcutOverlay').classList.remove('hidden');
+    state.isBusy = true;
   }
 
-  function detectDelimiter(line) {
-    const semis = (line.match(/;/g)||[]).length;
-    const commas = (line.match(/,/g)||[]).length;
-    return semis >= commas ? ";" : ",";
+  function hideOverlay() {
+    $('#shortcutOverlay').classList.add('hidden');
+    state.isBusy = false;
   }
 
-  function parseCsv(text) {
-    const firstLine = (text.split(/\r?\n/)[0] || "");
-    const delimiter = detectDelimiter(firstLine);
+  function setVerifyStatus(type, title, message) {
+    state.verifyStatus = { type, title, message };
+    save(KEYS.verifyStatus, state.verifyStatus);
+  }
+
+  function clearVerifyStatus() {
+    state.verifyStatus = null;
+    save(KEYS.verifyStatus, null);
+  }
+
+  function categoryType(cat = '') {
+    const s = String(cat).trim().toLowerCase();
+    if (!s) return 'other';
+    if (s.includes('senior')) return 'senior';
+    if (['11-12 ans', '13-14 ans', '15-16 ans', '17-18 ans', '11/12 ans', '13/14 ans', '15/16 ans', '17/18 ans'].includes(s)) return 'youth';
+    if (/\d{1,2}[\/-]\d{1,2}\s*ans/.test(s)) return 'youth';
+    return 'other';
+  }
+
+  function uniqueCategories() {
+    return [...new Set(state.players.map((p) => p.category).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'fr'));
+  }
+
+  function stats() {
+    return {
+      total: state.players.length,
+      exists: state.players.filter((p) => p.contactStatus === 'exists').length,
+      missing: state.players.filter((p) => p.contactStatus === 'missing').length
+    };
+  }
+
+  function parseCSV(text) {
+    const first = text.split(/\r?\n/)[0] || '';
+    const delimiter = (first.match(/;/g) || []).length >= (first.match(/,/g) || []).length ? ';' : ',';
     const rows = [];
-    let row = [], cell = "", quoted = false;
-    for (let i=0; i<text.length; i++) {
-      const ch = text[i], next = text[i+1];
+    let row = [];
+    let cell = '';
+    let q = false;
+
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      const next = text[i + 1];
       if (ch === '"') {
-        if (quoted && next === '"') { cell += '"'; i++; }
-        else quoted = !quoted;
-      } else if (ch === delimiter && !quoted) {
-        row.push(cell); cell = "";
-      } else if ((ch === "\n" || ch === "\r") && !quoted) {
-        if (ch === "\r" && next === "\n") i++;
-        row.push(cell); cell = "";
-        if (row.some(x => String(x).trim() !== "")) rows.push(row);
+        if (q && next === '"') {
+          cell += '"';
+          i++;
+        } else {
+          q = !q;
+        }
+      } else if (ch === delimiter && !q) {
+        row.push(cell);
+        cell = '';
+      } else if ((ch === '\n' || ch === '\r') && !q) {
+        if (ch === '\r' && next === '\n') i++;
+        row.push(cell);
+        cell = '';
+        if (row.some((v) => String(v).trim() !== '')) rows.push(row);
         row = [];
-      } else cell += ch;
+      } else {
+        cell += ch;
+      }
     }
-    if (cell.length || row.length) { row.push(cell); rows.push(row); }
+    if (cell.length || row.length) {
+      row.push(cell);
+      rows.push(row);
+    }
     return rows;
   }
 
-  function normHeader(h="") {
-    return h.normalize("NFD").replace(/[\u0300-\u036f]/g,"")
-      .toLowerCase().trim().replace(/[^a-z0-9]/g,"");
+  function normHeader(h = '') {
+    return String(h)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]/g, '');
   }
 
   function mapHeaders(headers) {
     const aliases = {
-      firstName:["prenom","firstname","joueurprenom"],
-      lastName:["nom","lastname","nomjoueur"],
-      phone:["telephone","tel","portable","mobile","gsm","numerotelephone"],
-      birthDate:["datedenaissance","naissance","birthdate","datenaissance"],
-      birthYear:["anneedenaissance","anneenaissance","birthyear"],
-      gender:["sexe","genre","gender"],
-      ranking:["classement","ranking","classementfft"],
-      club:["club","nomclub"],
-      category:["categorie","categoriedage","category"]
+      firstName: ['prenom', 'firstname'],
+      lastName: ['nom', 'lastname'],
+      phone: ['telephoneportable', 'portable', 'telephone', 'tel', 'mobile', 'numerotelephone'],
+      ranking: ['classement', 'classementinscription', 'ranking'],
+      club: ['club', 'nomclub'],
+      category: ['categoriedage', 'categorieage', 'categorie', 'category'],
+      gender: ['sexe', 'genre', 'gender']
     };
     const map = {};
     headers.forEach((h, i) => {
       const n = normHeader(h);
-      for (const [key, list] of Object.entries(aliases)) {
-        if (!map[key] && list.includes(n)) map[key] = i;
+      for (const [k, list] of Object.entries(aliases)) {
+        if (map[k] === undefined && list.includes(n)) map[k] = i;
       }
     });
     return map;
   }
 
-  function importCsvText(text) {
-    const rows = parseCsv(text);
-    if (rows.length < 2) throw new Error("Le fichier ne contient pas assez de lignes.");
+  function genderNorm(v = '') {
+    const s = String(v).trim().toLowerCase();
+    if (['f', 'femme', 'fille', 'female'].includes(s)) return 'F';
+    if (['m', 'h', 'homme', 'garçon', 'garcon', 'male'].includes(s)) return 'H';
+    return '';
+  }
+
+  async function importFile(file) {
+    const ext = file.name.split('.').pop().toLowerCase();
+    let rows = [];
+
+    if (ext === 'csv') {
+      rows = parseCSV(await file.text());
+    } else if (['xls', 'xlsx'].includes(ext)) {
+      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    } else {
+      throw new Error('Format non pris en charge. Utilise CSV, XLS ou XLSX.');
+    }
+
+    if (rows.length < 2) throw new Error('Le fichier ne contient pas assez de lignes.');
+
     const headers = rows[0];
     const map = mapHeaders(headers);
     if (map.lastName === undefined || map.phone === undefined) {
-      throw new Error("Colonnes minimales non trouvées : Nom et Téléphone.");
+      throw new Error('Colonnes minimales introuvables : Nom et Téléphone portable.');
     }
 
     let created = 0, updated = 0, skipped = 0;
-    for (const r of rows.slice(1)) {
-      const lastName = (r[map.lastName]||"").trim();
-      const firstName = map.firstName !== undefined ? (r[map.firstName]||"").trim() : "";
-      const phone = normalizePhone(r[map.phone]||"");
-      if (!lastName || !phone) { skipped++; continue; }
-
-      let birthDate = map.birthDate !== undefined ? parseDate(r[map.birthDate]||"") : "";
-      if (!birthDate && map.birthYear !== undefined) {
-        const y = parseInt(r[map.birthYear], 10);
-        if (y > 1900 && y <= new Date().getFullYear()) birthDate = `${y}-07-01`;
+    rows.slice(1).forEach((r) => {
+      const lastName = String(r[map.lastName] || '').trim();
+      const firstName = map.firstName !== undefined ? String(r[map.firstName] || '').trim() : '';
+      const phone = normalizePhone(r[map.phone] || '');
+      if (!lastName || !phone) {
+        skipped++;
+        return;
       }
-
-      const player = {
+      const entry = {
         id: uid(),
         firstName,
         lastName,
         phone,
-        birthDate,
-        gender: map.gender !== undefined ? genderNorm(r[map.gender]) : "",
-        ranking: map.ranking !== undefined ? (r[map.ranking]||"").trim() : "",
-        club: map.club !== undefined ? (r[map.club]||"").trim() : "",
-        category: map.category !== undefined ? (r[map.category]||"").trim() : "",
-        contactStatus: "unknown",
+        ranking: map.ranking !== undefined ? String(r[map.ranking] || '').trim() : '',
+        club: map.club !== undefined ? String(r[map.club] || '').trim() : 'TENNIS CLUB DE VITROLLES',
+        category: map.category !== undefined ? String(r[map.category] || '').trim() : '',
+        gender: map.gender !== undefined ? genderNorm(r[map.gender]) : '',
+        contactStatus: 'unknown',
         importedAt: new Date().toISOString()
       };
-
-      const existing = state.players.find(p => normalizePhone(p.phone) === phone);
+      const existing = state.players.find((p) => normalizePhone(p.phone) === phone);
       if (existing) {
-        Object.assign(existing, {...player, id: existing.id, contactStatus: existing.contactStatus || "unknown"});
+        Object.assign(existing, { ...entry, id: existing.id, contactStatus: existing.contactStatus || 'unknown' });
         updated++;
       } else {
-        state.players.push(player);
+        state.players.push(entry);
         created++;
       }
-    }
+    });
+
     save(KEYS.players, state.players);
-    return {created, updated, skipped, total: state.players.length};
+    return { created, updated, skipped, total: state.players.length };
   }
 
   function addDemo() {
-    if (state.players.length && !confirm("La base contient déjà des joueurs. Ajouter quand même les joueurs de démonstration ?")) return;
     const demo = [
-      ["Emma","MARTIN","+33612345610","2012-05-12","F","15/2","TC Vitrolles","13/14"],
-      ["Lucas","DUPONT","+33612345611","2010-08-04","H","15/1","TC Marseille","15/16"],
-      ["Hugo","DURAND","+33722456103","2013-02-17","H","30","TC Aix","13/14"],
-      ["Léa","ROBERT","+33642157621","2008-09-10","F","5/6","TC Vitrolles","17/18"],
-      ["Julie","GARCIA","+33672443920","1994-03-02","F","5/6","TC Aix","Senior"]
-    ].map(d => ({
-      id:uid(),firstName:d[0],lastName:d[1],phone:d[2],birthDate:d[3],gender:d[4],
-      ranking:d[5],club:d[6],category:d[7],contactStatus:"unknown",importedAt:new Date().toISOString()
-    }));
-    for (const p of demo) {
-      if (!state.players.some(x => normalizePhone(x.phone) === p.phone)) state.players.push(p);
-    }
-    save(KEYS.players,state.players);
+      { firstName: 'Lucas', lastName: 'DANIEL', phone: '+33782565405', category: 'Senior', ranking: '15/4', club: 'TENNIS CLUB DE VITROLLES', gender: 'H' },
+      { firstName: 'Emma', lastName: 'MARTIN', phone: '+33612345610', category: '13-14 ans', ranking: '15/2', club: 'TC Vitrolles', gender: 'F' },
+      { firstName: 'Jules', lastName: 'ROBERT', phone: '+33688443322', category: '15-16 ans', ranking: '15/3', club: 'TC Vitrolles', gender: 'H' },
+      { firstName: 'Julie', lastName: 'GARCIA', phone: '+33672443920', category: 'Senior', ranking: '5/6', club: 'TC Aix', gender: 'F' }
+    ];
+    demo.forEach((p) => {
+      if (!state.players.some((x) => normalizePhone(x.phone) === p.phone)) {
+        state.players.push({ ...p, id: uid(), contactStatus: 'unknown', importedAt: new Date().toISOString() });
+      }
+    });
+    save(KEYS.players, state.players);
     render();
+    toast('Joueurs de démonstration ajoutés.');
+  }
+
+  function statusPill(player) {
+    if (player.contactStatus === 'exists') return '<span class="pill pill--green">✓ Dans Contacts</span>';
+    if (player.contactStatus === 'missing') return '<span class="pill pill--orange">À créer</span>';
+    return '<span class="pill pill--gray">Non vérifié</span>';
+  }
+
+  function noticeBlock() {
+    if (!state.verifyStatus) return '';
+    const map = { info: 'banner--info', warn: 'banner--warn', success: 'banner--success', error: 'banner--error' };
+    return `<div class="banner ${map[state.verifyStatus.type] || 'banner--info'}"><strong>${esc(state.verifyStatus.title)}</strong>${esc(state.verifyStatus.message)}</div>`;
+  }
+
+  function renderHome() {
+    const st = stats();
+    return `
+      <section class="hero">
+        <div class="hero__top">
+          <div>
+            <span class="chip">Communication club simplifiée</span>
+            <h2>Importe, cible et communique sans te perdre.</h2>
+            <p>Une interface plus simple pour gérer les joueurs, vérifier les contacts iPhone et préparer tes communications jeunes ou seniors.</p>
+          </div>
+          <div class="hero__logo"><img src="assets/tcv-logo.png" alt=""></div>
+        </div>
+        <div class="chip-row">
+          <span class="chip">Jeunes</span>
+          <span class="chip">Seniors</span>
+          <span class="chip">Catégorie précise</span>
+          <span class="chip">Raccourcis iPhone</span>
+        </div>
+      </section>
+      <div class="kpi-grid section">
+        <div class="kpi"><div class="kpi__value">${st.total}</div><div class="kpi__label">joueurs</div></div>
+        <div class="kpi"><div class="kpi__value">${st.exists}</div><div class="kpi__label">contacts OK</div></div>
+        <div class="kpi"><div class="kpi__value">${st.missing}</div><div class="kpi__label">à créer</div></div>
+      </div>
+      <section class="grid cols-2 section">
+        <div class="card">
+          <h3 class="card__title">Actions rapides</h3>
+          <button class="quick-action is-blue" data-action="import"><span class="quick-action__icon">⇩</span><span class="quick-action__copy"><strong>Importer un fichier MOJA</strong><small>Formats CSV, XLS ou XLSX</small></span><span class="quick-action__arrow">›</span></button>
+          <button class="quick-action is-green" data-action="players"><span class="quick-action__icon">👥</span><span class="quick-action__copy"><strong>Gérer les joueurs</strong><small>Recherche, statut contact, base locale</small></span><span class="quick-action__arrow">›</span></button>
+          <button class="quick-action is-orange" data-action="campaign"><span class="quick-action__icon">🎯</span><span class="quick-action__copy"><strong>Préparer une campagne</strong><small>Jeunes, seniors ou catégorie précise</small></span><span class="quick-action__arrow">›</span></button>
+        </div>
+        <div class="card">
+          <h3 class="card__title">Parcours conseillé</h3>
+          <div class="banner banner--info"><strong>Étape 1</strong>Importe ton fichier MOJA.</div>
+          <div style="height:10px"></div>
+          <div class="banner banner--success"><strong>Étape 2</strong>Vérifie les numéros présents dans les Contacts iPhone.</div>
+          <div style="height:10px"></div>
+          <div class="banner banner--warn"><strong>Étape 3</strong>Crée les contacts manquants puis prépare la communication.</div>
+        </div>
+      </section>`;
+  }
+
+  function renderPlayers() {
+    const cards = state.players.map((p) => `
+      <article class="player-card" data-search="${esc(`${p.firstName} ${p.lastName} ${p.phone} ${p.club} ${p.category}`.toLowerCase())}">
+        <div class="player-card__main">
+          <div class="avatar">${esc(initials(p))}</div>
+          <div style="flex:1;min-width:0">
+            <h3>${esc(`${p.firstName} ${p.lastName}`.trim())}</h3>
+            <div class="meta">
+              ${p.category ? `<span class="pill pill--blue">${esc(p.category)}</span>` : ''}
+              ${p.ranking ? `<span class="pill pill--gray">${esc(p.ranking)}</span>` : ''}
+              ${p.gender ? `<span class="pill ${p.gender === 'F' ? 'pill--orange' : 'pill--green'}">${p.gender === 'F' ? 'Féminin' : 'Masculin'}</span>` : ''}
+            </div>
+            <div class="subline">${esc((p.club || '').toUpperCase())}</div>
+            <div class="phone">${esc(p.phone)}</div>
+          </div>
+          <div class="status-wrap">${statusPill(p)}</div>
+        </div>
+      </article>`).join('');
+
+    return `
+      <section class="page-head"><div><h2>Joueurs</h2><p>${state.players.length} dans la base locale</p></div></section>
+      <div class="toolbar"><input id="searchPlayers" class="search" type="search" placeholder="Nom, club ou téléphone"><button class="btn btn-primary" data-action="import">Importer</button></div>
+      <div class="section">${noticeBlock()}</div>
+      <div class="row-actions"><button class="btn btn-success btn-full" data-action="verifyContacts">🪪 Vérifier Contacts iPhone</button><button class="btn btn-secondary" data-action="demo">Ajouter démo</button><button class="btn btn-danger" data-action="clearPlayers">Vider la base</button></div>
+      <div class="banner banner--info section"><strong>Astuce</strong>Après l’import, lance <b>Vérifier Contacts iPhone</b>. Les fiches passeront automatiquement à <b>✓ Dans Contacts</b> ou <b>À créer</b>.</div>
+      <div id="playerList" class="player-list">${cards || '<div class="empty">Aucun joueur importé pour le moment.</div>'}</div>`;
+  }
+
+  function renderCampaign() {
+    const labels = { all: 'Tous', youth: 'Jeunes', senior: 'Seniors', category: 'Catégorie' };
+    const active = state.audienceQuick;
+    const catOpts = uniqueCategories().map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+    return `
+      <section class="page-head"><div><h2>Campagne</h2><p>Cible rapidement les bons joueurs</p></div></section>
+      <div class="segmented section" id="quickAudience">${['all', 'youth', 'senior', 'category'].map((v) => `<button type="button" data-audience="${v}" class="${active === v ? 'active' : ''}">${labels[v]}</button>`).join('')}</div>
+      <div class="card section">
+        <form id="campaignForm" class="field-grid">
+          <div class="field full"><label>Nom de la campagne</label><input id="campaignName" value="Communication Club" placeholder="Ex. TMC Dames, Tournoi jeunes, Portes ouvertes"></div>
+          <div class="field"><label>Public</label>
+            <select id="audienceSelect">
+              <option value="all" ${active === 'all' ? 'selected' : ''}>Tous</option>
+              <option value="youth" ${active === 'youth' ? 'selected' : ''}>Jeunes</option>
+              <option value="senior" ${active === 'senior' ? 'selected' : ''}>Seniors</option>
+              <option value="category" ${active === 'category' ? 'selected' : ''}>Catégorie précise</option>
+            </select>
+          </div>
+          <div class="field"><label>Sexe</label><select id="genderSelect"><option value="ALL">Tous</option><option value="F">Filles / Femmes</option><option value="H">Garçons / Hommes</option></select></div>
+          <div class="field full" id="categoryField" ${active === 'category' ? '' : 'hidden'}><label>Catégorie du fichier MOJA</label><select id="categorySelect"><option value="">Choisir</option>${catOpts}</select></div>
+          <div class="field full"><button class="btn btn-primary btn-full" type="submit">Trouver les destinataires</button></div>
+        </form>
+      </div>
+      <div id="eligibleArea" class="section"></div>`;
+  }
+
+  function buildEligible(filter) {
+    const list = state.players.filter((p) => {
+      const type = categoryType(p.category);
+      if (filter.audience === 'youth' && type !== 'youth') return false;
+      if (filter.audience === 'senior' && type !== 'senior') return false;
+      if (filter.audience === 'category' && filter.category && p.category !== filter.category) return false;
+      if (filter.gender !== 'ALL' && p.gender && p.gender !== filter.gender) return false;
+      return true;
+    });
+    state.currentEligible = list;
+    state.campaignSelection = new Set(list.map((p) => p.id));
+
+    const rows = list.map((p) => `
+      <label class="player-card">
+        <div class="player-card__main">
+          <input class="recipientCheck" type="checkbox" data-id="${p.id}" checked style="width:22px;height:22px;accent-color:#0B4F8A;margin-top:25px;flex:0 0 auto">
+          <div class="avatar">${esc(initials(p))}</div>
+          <div style="flex:1;min-width:0">
+            <h3 style="font-size:18px">${esc(`${p.firstName} ${p.lastName}`.trim())}</h3>
+            <div class="meta">${p.category ? `<span class="pill pill--blue">${esc(p.category)}</span>` : ''}${p.ranking ? `<span class="pill pill--gray">${esc(p.ranking)}</span>` : ''}</div>
+            <div class="phone" style="font-size:16px">${esc(p.phone)}</div>
+          </div>
+        </div>
+      </label>`).join('');
+
+    return `<div class="card"><h3 class="card__title">Résultat du ciblage</h3><p class="card__text">${list.length} joueur(s) correspondent à ce filtre.</p><div class="player-list" style="margin-top:14px">${rows || '<div class="empty">Aucun joueur ne correspond à ces critères.</div>'}</div>${list.length ? '<div class="row-actions"><button class="btn btn-primary btn-full" data-action="composeMessage">Préparer le message</button></div>' : ''}</div>`;
+  }
+
+  function renderComposer() {
+    const selected = state.players.filter((p) => state.campaignSelection.has(p.id));
+    return `
+      <section class="page-head"><div><h2>Message</h2><p>${selected.length} destinataire(s) sélectionné(s)</p></div></section>
+      <div class="card">
+        <div class="field-grid">
+          <div class="field full"><label>Message</label><textarea id="messageText">Bonjour,\n\nLe Tennis Club de Vitrolles vous informe d'une nouvelle actualité / compétition / animation. 🎾\n\nN'hésitez pas à nous contacter pour plus d'informations.\n\nSportivement,\nLe TC Vitrolles</textarea></div>
+          <div class="field full"><button class="btn btn-primary btn-full" data-action="sendMessages">📩 Ouvrir le raccourci Messages</button></div>
+          <div class="field full"><button class="btn btn-secondary btn-full" data-action="goContacts">Vérifier les contacts avant</button></div>
+        </div>
+      </div>`;
+  }
+
+  function renderContacts() {
+    const selected = state.players.filter((p) => state.campaignSelection.has(p.id));
+    const missing = selected.filter((p) => p.contactStatus === 'missing');
+    return `
+      <section class="page-head"><div><h2>Contacts</h2><p>${missing.length} contact(s) à créer</p></div></section>
+      <div class="banner banner--warn"><strong>Création via Raccourcis</strong>iPhone ne permet pas à la web app d’écrire directement dans les Contacts. La création passe donc par un raccourci dédié.</div>
+      <div class="row-actions section"><button class="btn btn-success btn-full" data-action="createContacts" ${missing.length ? '' : 'disabled'}>📇 Ouvrir le raccourci Contacts</button></div>
+      <div class="player-list section">${selected.map((p) => `
+        <article class="player-card"><div class="player-card__main"><div class="avatar">${esc(initials(p))}</div><div style="flex:1"><h3 style="font-size:18px">${esc(`${p.firstName} ${p.lastName}`.trim())}</h3><div class="phone" style="font-size:16px">${esc(p.phone)}</div></div><div class="status-wrap">${statusPill(p)}</div></div></article>
+      `).join('') || '<div class="empty">Aucune campagne active.</div>'}</div>`;
+  }
+
+  function renderHistory() {
+    const rows = [...state.history].reverse().map((h) => `<article class="player-card"><div class="player-card__main"><div class="avatar">🕘</div><div style="flex:1"><h3 style="font-size:18px">${esc(h.name)}</h3><div class="subline">${new Date(h.date).toLocaleString('fr-FR')}</div></div><div class="status-wrap"><span class="pill pill--blue">${h.count} destinataires</span></div></div></article>`).join('');
+    return `<section class="page-head"><div><h2>Historique</h2><p>Suivi local des campagnes</p></div></section><div class="player-list">${rows || '<div class="empty">Aucune campagne enregistrée.</div>'}</div>`;
+  }
+
+  function render() {
+    const page = ({ home: renderHome, players: renderPlayers, campaign: renderCampaign, contacts: renderContacts, history: renderHistory })[state.route] || renderHome;
+    $('#view').innerHTML = page();
+    bind();
   }
 
   function route(name) {
     state.route = name;
-    document.querySelectorAll(".nav-item").forEach(b => b.classList.toggle("active", b.dataset.route === name));
+    $$('.nav-item').forEach((b) => b.classList.toggle('active', b.dataset.route === name));
     render();
-    scrollTo({top:0, behavior:"smooth"});
+    scrollTo({ top: 0, behavior: 'smooth' });
   }
 
-  function render() {
-    const view = document.getElementById("view");
-    const routes = {
-      home: renderHome,
-      players: renderPlayers,
-      campaign: renderCampaign,
-      contacts: renderContacts,
-      history: renderHistory
-    };
-    view.innerHTML = (routes[state.route] || renderHome)();
-    bindView();
-  }
-
-  function renderHome() {
-    const total = state.players.length;
-    const knownContacts = state.players.filter(p => p.contactStatus === "exists").length;
-    const toCreate = state.players.filter(p => p.contactStatus === "missing").length;
-    return `
-      <section class="hero">
-        <img class="logo-large" src="assets/tcv-logo.png" alt="">
-        <h2>Vos tournois,<br>vos joueurs, vos messages.</h2>
-        <p>Importez MOJA, ciblez les bons joueurs et préparez vos communications depuis votre iPhone.</p>
-      </section>
-
-      <div class="stats">
-        <div class="stat"><b>${total}</b><span>joueurs</span></div>
-        <div class="stat"><b>${knownContacts}</b><span>contacts OK</span></div>
-        <div class="stat"><b>${toCreate}</b><span>à créer</span></div>
-      </div>
-
-      <section class="section">
-        <div class="section-head"><h3>Actions rapides</h3></div>
-        <div class="actions">
-          <button class="action blue" data-action="import"><span class="action-icon">⇩</span><span><strong>Importer MOJA</strong><small>CSV exporté depuis MOJA</small></span><span class="arrow">›</span></button>
-          <button class="action green" data-action="players"><span class="action-icon">👥</span><span><strong>Voir les joueurs</strong><small>Base locale sur cet appareil</small></span><span class="arrow">›</span></button>
-          <button class="action orange" data-action="campaign"><span class="action-icon">✈</span><span><strong>Créer une campagne</strong><small>Filtrer par âge et sexe</small></span><span class="arrow">›</span></button>
-        </div>
-      </section>
-
-      <section class="section">
-        <div class="card">
-          <div class="section-head"><h3>Parcours V1</h3><small>100 % gratuit</small></div>
-          <div class="row"><span class="pill blue">1</span><div><b>Import</b><div class="meta">MOJA CSV → base locale</div></div></div><hr>
-          <div class="row"><span class="pill blue">2</span><div><b>Ciblage</b><div class="meta">Âge • sexe • catégorie</div></div></div><hr>
-          <div class="row"><span class="pill green">3</span><div><b>Contacts</b><div class="meta">Préparation pour Raccourcis iOS</div></div></div><hr>
-          <div class="row"><span class="pill orange">4</span><div><b>Messages</b><div class="meta">Liste + texte transmis à Raccourcis</div></div></div>
-        </div>
-      </section>
-    `;
-  }
-
-  function renderPlayers() {
-    const cards = state.players.map(p => {
-      const age = ageFromBirthDate(p.birthDate);
-      const status = p.contactStatus === "exists"
-        ? `<span class="pill green">✓ Contact</span>`
-        : p.contactStatus === "missing"
-          ? `<span class="pill orange">À créer</span>`
-          : `<span class="pill gray">Non vérifié</span>`;
-      return `
-        <article class="player-card" data-search="${esc(`${p.firstName} ${p.lastName} ${p.phone} ${p.club}`.toLowerCase())}">
-          <div class="row">
-            <div class="avatar">${esc(initials(p))}</div>
-            <div class="grow">
-              <div class="name">${esc(p.firstName)} ${esc(p.lastName)}</div>
-              <div class="meta">${age === null ? "Âge inconnu" : `${age} ans`} • ${esc(p.category || "Catégorie inconnue")} • ${esc(p.ranking || "NC")}</div>
-              <div class="meta">${esc(p.club || "Club inconnu")} • ${esc(p.phone)}</div>
-            </div>
-            ${status}
-          </div>
-        </article>`;
-    }).join("");
-
-    return `
-      <div class="section-head"><div><h3>Joueurs</h3><small>${state.players.length} dans la base locale</small></div></div>
-      <div class="toolbar">
-        <input id="searchPlayers" class="search" type="search" placeholder="Nom, club ou téléphone">
-        <button class="btn btn-primary" data-action="import">Importer</button>
-      </div>
-      <div class="kpi-line">
-        <button class="btn btn-secondary" data-action="demo">Ajouter démo</button>
-        <button class="btn btn-danger" data-action="clearPlayers">Vider la base</button>
-      </div>
-      <div id="playerList" class="player-list">${cards || `<div class="empty">Aucun joueur. Importe un CSV MOJA ou utilise « Ajouter démo ».</div>`}</div>
-    `;
-  }
-
-  function playerEligible(p, minAge, maxAge, gender) {
-    const age = ageFromBirthDate(p.birthDate);
-    if (age === null) return false;
-    if (age < minAge || age > maxAge) return false;
-    if (gender && gender !== "ALL" && p.gender !== gender) return false;
-    return true;
-  }
-
-  function renderCampaign() {
-    return `
-      <div class="section-head"><div><h3>Nouvelle campagne</h3><small>Ciblage automatique</small></div></div>
-      <div class="card">
-        <form id="campaignForm" class="form-grid">
-          <div class="field full"><label>Nom de la campagne</label><input id="campaignName" value="Tournoi Jeunes 11/18 ans"></div>
-          <div class="field"><label>Âge minimum</label><input id="minAge" type="number" min="5" max="99" value="11"></div>
-          <div class="field"><label>Âge maximum</label><input id="maxAge" type="number" min="5" max="99" value="18"></div>
-          <div class="field full"><label>Sexe</label>
-            <select id="gender"><option value="ALL">Tous</option><option value="F">Filles / Femmes</option><option value="H">Garçons / Hommes</option></select>
-          </div>
-          <div class="field full"><button class="btn btn-primary btn-block" type="submit">Trouver les joueurs éligibles</button></div>
-        </form>
-      </div>
-      <section class="section">
-        <div class="notice">Les joueurs sans date de naissance exploitable sont exclus automatiquement du ciblage par âge.</div>
-      </section>
-      <section id="eligibleArea" class="section"></section>
-    `;
-  }
-
-  function buildEligibleResult(minAge, maxAge, gender) {
-    state.currentEligible = state.players.filter(p => playerEligible(p, minAge, maxAge, gender));
-    state.campaignSelection = new Set(state.currentEligible.map(p => p.id));
-    return eligibleHtml();
-  }
-
-  function eligibleHtml() {
-    const list = state.currentEligible.map(p => {
-      const age = ageFromBirthDate(p.birthDate);
-      return `
-        <label class="player-card selected" data-select-card="${p.id}">
-          <div class="row">
-            <input type="checkbox" class="eligibleCheck" data-id="${p.id}" checked>
-            <div class="avatar">${esc(initials(p))}</div>
-            <div class="grow"><div class="name">${esc(p.firstName)} ${esc(p.lastName)}</div><div class="meta">${age} ans • ${esc(p.ranking||"NC")} • ${esc(p.phone)}</div></div>
-          </div>
-        </label>`;
-    }).join("");
-
-    return `
-      <div class="section-head"><div><h3>Résultat du ciblage</h3><small>${state.currentEligible.length} éligible(s)</small></div></div>
-      ${state.currentEligible.length ? `
-        <div class="kpi-line"><span class="pill green">${state.currentEligible.length} éligibles</span><span class="pill blue" id="selectedPill">${state.campaignSelection.size} sélectionnés</span></div>
-        <div class="player-list">${list}</div>
-        <div class="bottom-actions">
-          <button class="btn btn-orange btn-block" data-action="prepareMessage">Préparer la communication</button>
-        </div>
-      ` : `<div class="empty">Aucun joueur ne correspond à ces critères.</div>`}
-    `;
-  }
-
-  function renderContacts() {
-    const selected = state.players.filter(p => state.campaignSelection.has(p.id));
-    const rows = selected.map(p => `
-      <article class="player-card">
-        <div class="row-between">
-          <div><div class="name">${esc(p.firstName)} ${esc(p.lastName)}</div><div class="meta">${esc(p.phone)}</div></div>
-          <select class="contactStatus" data-id="${p.id}">
-            <option value="unknown" ${p.contactStatus==="unknown"?"selected":""}>Non vérifié</option>
-            <option value="exists" ${p.contactStatus==="exists"?"selected":""}>Existe</option>
-            <option value="missing" ${p.contactStatus==="missing"?"selected":""}>À créer</option>
-          </select>
-        </div>
-      </article>`).join("");
-
-    const missing = selected.filter(p => p.contactStatus === "missing");
-    const payload = missing.map(p => ({firstName:p.firstName,lastName:p.lastName,phone:p.phone,club:p.club}));
-    return `
-      <div class="section-head"><div><h3>Contacts</h3><small>${selected.length} joueur(s) de la campagne</small></div></div>
-      ${selected.length ? `
-        <div class="notice warn">Une PWA ne peut pas lire librement tes Contacts iPhone. Dans cette V1, tu marques les correspondances puis tu transmets les contacts manquants au raccourci iOS.</div>
-        <div class="section player-list">${rows}</div>
-        <section class="section card">
-          <h3>Créer les contacts manquants</h3>
-          <p class="meta">${missing.length} contact(s) marqué(s) « À créer ».</p>
-          <button class="btn btn-green btn-block" data-action="runContactsShortcut" ${missing.length ? "" : "disabled"}>Ouvrir le raccourci Contacts</button>
-          <details style="margin-top:12px"><summary>Données transmises</summary><div class="codebox">${esc(JSON.stringify(payload,null,2))}</div></details>
-        </section>
-      ` : `<div class="empty">Crée d'abord une campagne et sélectionne les joueurs.</div>`}
-    `;
-  }
-
-  function renderMessageComposer() {
-    const selected = state.players.filter(p => state.campaignSelection.has(p.id));
-    return `
-      <div class="section-head"><div><h3>Préparer le message</h3><small>${selected.length} destinataire(s)</small></div></div>
-      <div class="card">
-        <div class="field"><label>Message</label>
-          <textarea id="messageText">Bonjour,\n\nLe Tennis Club de Vitrolles organise son tournoi jeunes 11/18 ans ! 🎾\n\nNous serions ravis de vous y voir. N'hésitez pas à vous inscrire.\n\nSportivement,\nLe TC Vitrolles</textarea>
-        </div>
-        <div class="kpi-line"><span class="pill blue">${selected.length} destinataires</span><span class="pill green">${selected.filter(p=>p.phone).length} téléphones</span></div>
-        <button class="btn btn-orange btn-block" data-action="runMessagesShortcut">Ouvrir le raccourci Messages</button>
-        <button class="btn btn-secondary btn-block" style="margin-top:8px" data-action="goContacts">Vérifier les contacts avant</button>
-        <div class="notice" style="margin-top:12px">Conseil : pour respecter la confidentialité des numéros, privilégie un envoi individuel automatisé par le raccourci plutôt qu'un groupe visible par tous.</div>
-      </div>
-    `;
-  }
-
-  function renderHistory() {
-    const items = [...state.history].reverse().map(h => `
-      <div class="card">
-        <div class="row-between"><div><div class="name">${esc(h.name)}</div><div class="meta">${new Date(h.date).toLocaleString("fr-FR")}</div></div><span class="pill blue">${h.count} destinataires</span></div>
-      </div>`).join("");
-    return `
-      <div class="section-head"><div><h3>Historique</h3><small>Campagnes préparées sur cet appareil</small></div></div>
-      ${items || `<div class="empty">Aucune campagne enregistrée.</div>`}
-    `;
-  }
-
-  function bindView() {
-    document.querySelectorAll("[data-action='import']").forEach(b => b.onclick = () => document.getElementById("fileInput").click());
-    document.querySelectorAll("[data-action='players']").forEach(b => b.onclick = () => route("players"));
-    document.querySelectorAll("[data-action='campaign']").forEach(b => b.onclick = () => route("campaign"));
-    document.querySelectorAll("[data-action='demo']").forEach(b => b.onclick = addDemo);
-    document.querySelectorAll("[data-action='clearPlayers']").forEach(b => b.onclick = () => {
-      if (confirm("Supprimer tous les joueurs de la base locale ?")) {
-        state.players = []; state.campaignSelection.clear(); state.currentEligible = [];
-        save(KEYS.players, state.players); render();
+  function bind() {
+    $$('[data-action="import"]').forEach((b) => b.onclick = () => $('#fileInput').click());
+    $$('[data-action="players"]').forEach((b) => b.onclick = () => route('players'));
+    $$('[data-action="campaign"]').forEach((b) => b.onclick = () => route('campaign'));
+    $$('[data-action="verifyContacts"]').forEach((b) => b.onclick = verifyContacts);
+    $$('[data-action="demo"]').forEach((b) => b.onclick = addDemo);
+    $$('[data-action="clearPlayers"]').forEach((b) => b.onclick = () => {
+      if (confirm('Supprimer tous les joueurs de la base locale ?')) {
+        state.players = [];
+        save(KEYS.players, state.players);
+        clearVerifyStatus();
+        render();
       }
     });
+    $$('[data-action="composeMessage"]').forEach((b) => b.onclick = () => {
+      $('#view').innerHTML = renderComposer();
+      bind();
+      scrollTo({ top: 0, behavior: 'smooth' });
+    });
+    $$('[data-action="goContacts"]').forEach((b) => b.onclick = () => route('contacts'));
+    $$('[data-action="createContacts"]').forEach((b) => b.onclick = runContactsShortcut);
+    $$('[data-action="sendMessages"]').forEach((b) => b.onclick = runMessagesShortcut);
 
-    const search = document.getElementById("searchPlayers");
-    if (search) search.oninput = () => {
-      const q = search.value.trim().toLowerCase();
-      document.querySelectorAll(".player-card[data-search]").forEach(c => {
-        c.hidden = q && !c.dataset.search.includes(q);
+    const search = $('#searchPlayers');
+    if (search) {
+      search.oninput = () => {
+        const q = search.value.trim().toLowerCase();
+        $$('.player-card[data-search]').forEach((card) => {
+          card.hidden = q && !card.dataset.search.includes(q);
+        });
+      };
+    }
+
+    const seg = $('#quickAudience');
+    if (seg) {
+      seg.querySelectorAll('button').forEach((btn) => btn.onclick = () => {
+        state.audienceQuick = btn.dataset.audience;
+        route('campaign');
       });
-    };
+    }
 
-    const form = document.getElementById("campaignForm");
-    if (form) form.onsubmit = e => {
-      e.preventDefault();
-      let min = Math.max(0, parseInt(document.getElementById("minAge").value,10) || 0);
-      let max = Math.max(0, parseInt(document.getElementById("maxAge").value,10) || 120);
-      if (min > max) [min,max] = [max,min];
-      const gender = document.getElementById("gender").value;
-      document.getElementById("eligibleArea").innerHTML = buildEligibleResult(min,max,gender);
-      bindEligibleChecks();
-      const name = document.getElementById("campaignName").value.trim() || "Campagne TCV";
-      state.campaigns.push({id:uid(),name,minAge:min,maxAge:max,gender,date:new Date().toISOString()});
-      save(KEYS.campaigns,state.campaigns);
-    };
+    const sel = $('#audienceSelect');
+    if (sel) {
+      sel.onchange = () => {
+        state.audienceQuick = sel.value;
+        route('campaign');
+      };
+    }
 
-    bindEligibleChecks();
+    const form = $('#campaignForm');
+    if (form) {
+      form.onsubmit = (e) => {
+        e.preventDefault();
+        const filter = {
+          audience: $('#audienceSelect').value,
+          gender: $('#genderSelect').value,
+          category: $('#categorySelect')?.value || ''
+        };
+        $('#eligibleArea').innerHTML = buildEligible(filter);
+        bind();
+        $$('.recipientCheck').forEach((ch) => ch.onchange = () => {
+          if (ch.checked) state.campaignSelection.add(ch.dataset.id);
+          else state.campaignSelection.delete(ch.dataset.id);
+        });
+        state.campaigns.push({ id: uid(), name: $('#campaignName').value.trim() || 'Communication Club', date: new Date().toISOString(), filter });
+        save(KEYS.campaigns, state.campaigns);
+      };
+    }
 
-    document.querySelectorAll("[data-action='prepareMessage']").forEach(b => b.onclick = () => {
-      if (!state.campaignSelection.size) return alert("Sélectionne au moins un joueur.");
-      document.getElementById("view").innerHTML = renderMessageComposer();
-      bindView();
-    });
-
-    document.querySelectorAll("[data-action='goContacts']").forEach(b => b.onclick = () => route("contacts"));
-
-    document.querySelectorAll(".contactStatus").forEach(sel => sel.onchange = () => {
-      const p = state.players.find(x => x.id === sel.dataset.id);
-      if (p) p.contactStatus = sel.value;
-      save(KEYS.players,state.players);
-      render();
-    });
-
-    document.querySelectorAll("[data-action='runContactsShortcut']").forEach(b => b.onclick = () => runContactsShortcut());
-    document.querySelectorAll("[data-action='runMessagesShortcut']").forEach(b => b.onclick = () => runMessagesShortcut());
+    $('#overlayCloseBtn').onclick = () => hideOverlay();
   }
 
-  function bindEligibleChecks() {
-    document.querySelectorAll(".eligibleCheck").forEach(cb => cb.onchange = () => {
-      if (cb.checked) state.campaignSelection.add(cb.dataset.id);
-      else state.campaignSelection.delete(cb.dataset.id);
-      const card = document.querySelector(`[data-select-card="${cb.dataset.id}"]`);
-      if (card) card.classList.toggle("selected", cb.checked);
-      const pill = document.getElementById("selectedPill");
-      if (pill) pill.textContent = `${state.campaignSelection.size} sélectionnés`;
+  function buildVerifyPayload(players) {
+    const payload = {};
+    players.forEach((p, i) => {
+      payload[String(i + 1)] = { id: p.id, firstName: p.firstName, lastName: p.lastName, category: p.category, phone: p.phone };
     });
+    return payload;
   }
 
-  function launchShortcut(name, payload) {
+  function buildContactsPayload() {
+    return state.players
+      .filter((p) => state.campaignSelection.has(p.id) && p.contactStatus === 'missing')
+      .map((p) => ({ firstName: p.firstName, lastName: p.lastName, phone: p.phone, club: p.club }));
+  }
+
+  function buildMessagesPayload(message) {
+    return {
+      recipients: state.players
+        .filter((p) => state.campaignSelection.has(p.id) && p.phone)
+        .map((p) => ({ name: `${p.firstName} ${p.lastName}`.trim(), phone: p.phone })),
+      message
+    };
+  }
+
+  function launchShortcut(shortcutName, payload, returnTag) {
     const text = JSON.stringify(payload);
-    const url = `shortcuts://run-shortcut?name=${encodeURIComponent(name)}&input=text&text=${encodeURIComponent(text)}`;
-    location.href = url;
+    localStorage.setItem(KEYS.pendingShortcut, JSON.stringify({ tag: returnTag, at: Date.now() }));
+    showOverlay('Ouverture du raccourci…', 'Le raccourci iPhone va s’ouvrir. Au retour, l’application reprendra automatiquement.', false);
+    setTimeout(() => {
+      const success = `${location.origin}${location.pathname}?shortcut=${encodeURIComponent(returnTag)}`;
+      const url = `shortcuts://x-callback-url/run-shortcut?name=${encodeURIComponent(shortcutName)}&input=text&text=${encodeURIComponent(text)}&x-success=${encodeURIComponent(success)}`;
+      location.href = url;
+    }, 180);
+  }
+
+  function verifyContacts() {
+    if (!state.players.length) {
+      setVerifyStatus('warn', 'Vérification Contacts', 'Aucun joueur importé pour le moment.');
+      render();
+      return;
+    }
+    setVerifyStatus('info', 'Vérification Contacts', 'Vérification lancée…');
+    render();
+    launchShortcut(state.settings.verifyShortcut, buildVerifyPayload(state.players), 'contacts');
   }
 
   function runContactsShortcut() {
-    const selected = state.players.filter(p => state.campaignSelection.has(p.id) && p.contactStatus === "missing");
-    if (!selected.length) return alert("Aucun contact marqué « À créer ».");
-    const payload = selected.map(p => ({
-      firstName:p.firstName, lastName:p.lastName, phone:p.phone, club:p.club
-    }));
-    launchShortcut(state.settings.contactsShortcut, payload);
+    const payload = buildContactsPayload();
+    if (!payload.length) {
+      toast('Aucun contact manquant à créer.');
+      return;
+    }
+    launchShortcut(state.settings.contactsShortcut, payload, 'createContacts');
   }
 
   function runMessagesShortcut() {
-    const selected = state.players.filter(p => state.campaignSelection.has(p.id) && p.phone);
-    if (!selected.length) return alert("Aucun destinataire sélectionné.");
-    const msg = document.getElementById("messageText")?.value.trim();
-    if (!msg) return alert("Écris un message.");
-    const payload = {
-      recipients:selected.map(p => ({name:`${p.firstName} ${p.lastName}`, phone:p.phone})),
-      message:msg
-    };
-    launchShortcut(state.settings.messagesShortcut, payload);
-    state.history.push({
-      id:uid(),
-      name: state.campaigns.at(-1)?.name || "Campagne TCV",
-      date:new Date().toISOString(),
-      count:selected.length
-    });
-    save(KEYS.history,state.history);
+    const message = $('#messageText')?.value?.trim();
+    const recipients = state.players.filter((p) => state.campaignSelection.has(p.id) && p.phone);
+    if (!message) {
+      toast('Écris un message avant de continuer.');
+      return;
+    }
+    if (!recipients.length) {
+      toast('Aucun destinataire sélectionné.');
+      return;
+    }
+    state.history.push({ id: uid(), name: state.campaigns.at(-1)?.name || 'Communication Club', count: recipients.length, date: new Date().toISOString() });
+    save(KEYS.history, state.history);
+    launchShortcut(state.settings.messagesShortcut, buildMessagesPayload(message), 'messages');
   }
 
-  document.querySelectorAll(".nav-item").forEach(b => b.addEventListener("click", () => route(b.dataset.route)));
+  function applyVerifyResult(result) {
+    hideOverlay();
+    if (!result) {
+      setVerifyStatus('warn', 'Vérification Contacts', 'Le raccourci s’est terminé mais aucun résultat n’a été reçu. Vérifie que le raccourci produit bien un résultat à la fin.');
+      route('players');
+      return;
+    }
+    const clean = decodeURIComponent(result).trim();
+    if (!clean || clean === 'NONE') {
+      state.players.forEach((p) => p.contactStatus = 'missing');
+      save(KEYS.players, state.players);
+      setVerifyStatus('success', 'Vérification Contacts', 'Aucun numéro n’a été trouvé dans les Contacts iPhone. Tous les joueurs ont été marqués « À créer ».');
+      route('players');
+      return;
+    }
 
-  document.getElementById("fileInput").addEventListener("change", async e => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
+    let found = [];
     try {
-      const result = importCsvText(await file.text());
-      alert(`Import terminé :\n${result.created} nouveau(x)\n${result.updated} mis à jour\n${result.skipped} ignoré(s)\n\nBase : ${result.total} joueurs`);
-      route("players");
+      const parsed = JSON.parse(clean);
+      if (Array.isArray(parsed)) {
+        found = parsed.map((v) => typeof v === 'string' ? normalizePhone(v) : normalizePhone(v.phone || ''));
+      } else if (parsed && typeof parsed === 'object') {
+        found = Object.values(parsed).map((v) => typeof v === 'string' ? normalizePhone(v) : normalizePhone(v.phone || ''));
+      }
+    } catch {
+      found = clean.split(/\r?\n/).map(normalizePhone).filter(Boolean);
+    }
+
+    const set = new Set(found.filter(Boolean));
+    let count = 0;
+    state.players.forEach((p) => {
+      if (set.has(normalizePhone(p.phone))) {
+        p.contactStatus = 'exists';
+        count++;
+      } else {
+        p.contactStatus = 'missing';
+      }
+    });
+    save(KEYS.players, state.players);
+    setVerifyStatus('success', 'Vérification Contacts', `${count} contact(s) trouvé(s) dans l’iPhone. Les autres joueurs ont été marqués « À créer ».`);
+    route('players');
+  }
+
+  function processUrlParams() {
+    const params = new URLSearchParams(location.search);
+    const shortcut = params.get('shortcut');
+    const result = params.get('result');
+    const pending = load(KEYS.pendingShortcut, null);
+
+    if (shortcut) {
+      if (shortcut === 'contacts') {
+        applyVerifyResult(result);
+      } else {
+        hideOverlay();
+        if (shortcut === 'messages') toast('Retour depuis le raccourci Messages.');
+        if (shortcut === 'createContacts') toast('Retour depuis le raccourci Contacts.');
+      }
+      history.replaceState({}, document.title, location.pathname);
+      localStorage.removeItem(KEYS.pendingShortcut);
+      return;
+    }
+
+    if (pending && Date.now() - pending.at < 5 * 60 * 1000) {
+      showOverlay('En attente du retour…', 'Si tu viens de lancer un raccourci, reviens simplement ici à la fin. Cette fenêtre disparaîtra automatiquement au retour.', true);
+    }
+  }
+
+  $$('.nav-item').forEach((b) => b.addEventListener('click', () => route(b.dataset.route)));
+
+  $('#fileInput').addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    showOverlay('Import du fichier…', 'Lecture et traitement du fichier en cours.', false);
+    try {
+      const out = await importFile(file);
+      hideOverlay();
+      clearVerifyStatus();
+      route('players');
+      toast(`Import terminé : ${out.created} ajouté(s), ${out.updated} mis à jour.`, 3400);
     } catch (err) {
-      alert("Import impossible : " + err.message);
+      hideOverlay();
+      alert('Import impossible : ' + err.message);
     }
   });
 
-  window.addEventListener("beforeinstallprompt", e => {
+  window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
     state.deferredInstall = e;
-    const btn = document.getElementById("installBtn");
-    if (btn) btn.hidden = false;
+    $('#installBtn').hidden = false;
   });
 
-  document.getElementById("installBtn").addEventListener("click", async () => {
+  $('#installBtn').addEventListener('click', async () => {
     if (!state.deferredInstall) return;
     state.deferredInstall.prompt();
     await state.deferredInstall.userChoice;
     state.deferredInstall = null;
-    document.getElementById("installBtn").hidden = true;
+    $('#installBtn').hidden = true;
   });
 
-  if ("serviceWorker" in navigator) {
-    addEventListener("load", () => navigator.serviceWorker.register("service-worker.js").catch(()=>{}));
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('service-worker.js').catch(() => {}));
   }
 
+  processUrlParams();
   render();
-  return {route, state};
+  window.TCV = { state, route };
 })();
