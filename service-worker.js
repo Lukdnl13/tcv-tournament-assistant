@@ -1,17 +1,22 @@
-const CACHE = "tcv-assistant-v10";
-const ASSETS = [
-  "./","index.html","styles.css","ui-v2.css","category-targeting.css","app.js","contact-callback.js","excel-import.js","moja-ui.js","shortcut-input-fix.js","ui-v2.js","category-targeting.js","manifest.webmanifest",
-  "assets/tcv-logo.png","assets/icons/icon-192.png"
+const CACHE = "tcv-assistant-v11-redesign";
+const CORE = [
+  "./",
+  "index.html",
+  "styles.css",
+  "app.js",
+  "manifest.webmanifest",
+  "assets/tcv-logo.png",
+  "assets/icons/icon-192.png"
 ];
 
 self.addEventListener("install", event => {
-  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)));
+  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(CORE)));
   self.skipWaiting();
 });
 
 self.addEventListener("activate", event => {
   event.waitUntil(
-    caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
+    caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key))))
   );
   self.clients.claim();
 });
