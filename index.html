@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#07345D">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -11,42 +11,45 @@
   <link rel="apple-touch-icon" href="assets/icons/icon-192.png">
   <link rel="icon" href="assets/icons/icon-192.png">
   <link rel="stylesheet" href="styles.css">
-  <link rel="stylesheet" href="ui-v2.css">
-  <link rel="stylesheet" href="category-targeting.css">
   <title>TCV Tournament Assistant</title>
 </head>
 <body>
-  <div id="app" class="app-shell">
+  <div class="app-shell">
     <header class="topbar">
-      <div class="brand">
-        <img src="assets/tcv-logo.png" alt="Logo Tennis Club de Vitrolles" class="brand-logo">
-        <div>
-          <div class="eyebrow">Tennis Club de Vitrolles</div>
+      <div class="topbar__brand">
+        <div class="brand-logo-wrap"><img class="brand-logo" src="assets/tcv-logo.png" alt="Logo Tennis Club de Vitrolles"></div>
+        <div class="brand-copy">
+          <span class="brand-eyebrow">Tennis Club de Vitrolles</span>
           <h1>TCV Tournament Assistant</h1>
         </div>
       </div>
-      <button class="icon-btn" id="installBtn" hidden aria-label="Installer l'application">＋</button>
+      <button id="installBtn" class="icon-btn" hidden aria-label="Installer l'application">＋</button>
     </header>
 
-    <main id="view" class="view" aria-live="polite"></main>
+    <main id="view" class="view"></main>
 
     <nav class="bottom-nav" aria-label="Navigation principale">
-      <button data-route="home" class="nav-item active"><span>⌂</span><small>Accueil</small></button>
-      <button data-route="players" class="nav-item"><span>👥</span><small>Joueurs</small></button>
-      <button data-route="campaign" class="nav-item"><span>🎯</span><small>Campagne</small></button>
-      <button data-route="contacts" class="nav-item"><span>📇</span><small>Contacts</small></button>
-      <button data-route="history" class="nav-item"><span>🕘</span><small>Historique</small></button>
+      <button class="nav-item active" data-route="home"><span>⌂</span><small>Accueil</small></button>
+      <button class="nav-item" data-route="players"><span>👥</span><small>Joueurs</small></button>
+      <button class="nav-item" data-route="campaign"><span>🎯</span><small>Campagne</small></button>
+      <button class="nav-item" data-route="contacts"><span>📇</span><small>Contacts</small></button>
+      <button class="nav-item" data-route="history"><span>🕘</span><small>Historique</small></button>
     </nav>
   </div>
 
-  <input id="fileInput" type="file" accept=".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
-  <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+  <div id="shortcutOverlay" class="overlay hidden" aria-live="polite">
+    <div class="overlay-card">
+      <div class="spinner"></div>
+      <h3 id="overlayTitle">Ouverture du raccourci…</h3>
+      <p id="overlayText">Merci de patienter. Tu reviendras automatiquement dans l’application.</p>
+      <button id="overlayCloseBtn" class="btn btn-secondary hidden">Fermer</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <input id="fileInput" type="file" accept=".csv,.xls,.xlsx,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="app.js"></script>
-  <script src="contact-callback.js"></script>
-  <script src="excel-import.js"></script>
-  <script src="moja-ui.js"></script>
-  <script src="shortcut-input-fix.js"></script>
-  <script src="ui-v2.js"></script>
-  <script src="category-targeting.js"></script>
 </body>
 </html>
