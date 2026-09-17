@@ -3,7 +3,7 @@
   const VERIFY_STATUS_KEY = 'tcv_verify_status_v1';
   const PENDING_KEY = 'tcv_pending_shortcut_v3';
   const OPEN_DELAY_MS = 60;
-  const STALE_PENDING_MS = 12000;
+  const STALE_PENDING_MS = 180000; // 3 min : les gros fichiers peuvent demander du temps à Raccourcis
   let launching = false;
   let watchdog = null;
 
@@ -49,15 +49,17 @@
     return changed;
   }
 
+  // Payload ultra-léger pour les gros imports : le raccourci actuel n'a besoin que de la clé phone.
+  // Suppression des UUID/prénoms/noms pour éviter les URLs très longues avec 100+ joueurs.
   function buildVerifyPayload(players) {
     const payload = {};
     const seen = new Set();
     let index = 1;
     players.forEach(player => {
       const canonical = normalizePhone(player.phone);
-      if (!canonical || seen.has(`${player.id}|${canonical}`)) return;
-      seen.add(`${player.id}|${canonical}`);
-      payload[String(index++)] = { id: player.id, phone: lookupPhone(canonical) };
+      if (!canonical || seen.has(canonical)) return;
+      seen.add(canonical);
+      payload[String(index++)] = { phone: lookupPhone(canonical) };
     });
     return payload;
   }
@@ -77,12 +79,10 @@
       if (busy) {
         if (!button.dataset.originalLabel) button.dataset.originalLabel = button.textContent;
         button.disabled = true;
-        if (button.textContent !== '⏳ Ouverture…') button.textContent = '⏳ Ouverture…';
+        if (button.textContent !== '⏳ Vérification…') button.textContent = '⏳ Vérification…';
       } else {
         button.disabled = false;
-        if (button.dataset.originalLabel && button.textContent !== button.dataset.originalLabel) {
-          button.textContent = button.dataset.originalLabel;
-        }
+        if (button.dataset.originalLabel && button.textContent !== button.dataset.originalLabel) button.textContent = button.dataset.originalLabel;
       }
     });
   }
@@ -93,16 +93,16 @@
     const text = document.getElementById('overlayText');
     const close = document.getElementById('overlayCloseBtn');
     if (title) title.textContent = 'Vérification Contacts…';
-    if (text) text.textContent = `${count} joueur${count > 1 ? 's' : ''} transmis à Raccourcis.`;
+    if (text) text.textContent = `${count} numéro${count > 1 ? 's' : ''} transmis à Raccourcis. Pour un gros fichier, cela peut prendre quelques dizaines de secondes.`;
     if (close) close.classList.add('hidden');
     if (overlay) overlay.classList.remove('hidden');
 
     clearTimeout(watchdog);
     watchdog = setTimeout(() => {
       if (document.visibilityState !== 'visible') return;
-      if (text) text.textContent = 'Le retour automatique tarde. Tu peux fermer cette fenêtre puis relancer la vérification.';
+      if (text) text.textContent = 'La vérification est toujours en cours. Avec plus de 100 joueurs, laisse Raccourcis terminer puis revenir automatiquement.';
       if (close) close.classList.remove('hidden');
-    }, 3000);
+    }, 15000);
   }
 
   function hideOverlay() {
@@ -132,18 +132,12 @@
       return;
     }
 
-    if (Date.now() - Number(pending.at || 0) > 1400) {
-      setTimeout(() => {
-        const nowPending = readPending();
-        const nowParams = new URLSearchParams(location.search);
-        if (nowParams.get('shortcut') === 'contacts') return;
-        if (nowPending?.tag === 'contacts') {
-          localStorage.removeItem(PENDING_KEY);
-          hideOverlay();
-          setStatus('warn', 'Vérification Contacts', 'Retour détecté sans résultat. Tu peux relancer la vérification.');
-          if (window.TCV?.state?.route === 'players') window.TCV.route('players');
-        }
-      }, 250);
+    // Ne pas considérer un long traitement comme un échec. On laisse 3 minutes aux gros lots.
+    if (Date.now() - Number(pending.at || 0) > STALE_PENDING_MS) {
+      localStorage.removeItem(PENDING_KEY);
+      hideOverlay();
+      setStatus('warn', 'Vérification Contacts', 'Retour détecté sans résultat après plusieurs minutes. Tu peux relancer la vérification.');
+      if (window.TCV?.state?.route === 'players') window.TCV.route('players');
     }
   }
 
@@ -156,10 +150,10 @@
     launching = true;
     migrateStoredPhones();
     setVerifyButtonsBusy(true);
-    setStatus('info', 'Vérification Contacts', `Vérification de ${players.length} joueur${players.length > 1 ? 's' : ''}…`);
 
     const payload = buildVerifyPayload(players);
     const count = Object.keys(payload).length;
+    setStatus('info', 'Vérification Contacts', `Vérification de ${count} numéro${count > 1 ? 's' : ''}…`);
     localStorage.setItem(PENDING_KEY, JSON.stringify({ tag: 'contacts', at: Date.now(), count }));
     showOverlay(count);
 
