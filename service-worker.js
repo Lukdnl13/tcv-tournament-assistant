@@ -1,4 +1,4 @@
-const CACHE = "tcv-assistant-v16-large-contact-batches";
+const CACHE = "tcv-assistant-v17-fast-contact-verify";
 const CORE = [
   "./",
   "index.html",
