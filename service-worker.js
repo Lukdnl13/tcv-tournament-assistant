@@ -1,4 +1,4 @@
-const CACHE = "tcv-assistant-v18-compact-contact-result";
+const CACHE = "tcv-assistant-v19-indexed-contact-result";
 const CORE = [
   "./",
   "index.html",
