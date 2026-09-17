@@ -1,54 +1,79 @@
 # Raccourci iPhone — TCV - Vérifier contacts
 
-La PWA ouvre ce raccourci avec une liste JSON de joueurs contenant notamment leur `id`, leur nom et leur numéro normalisé en `+33...`.
+## Version rapide recommandée
 
-## Sortie recommandée du raccourci
-
-La méthode la plus simple est de renvoyer uniquement les **numéros qui existent déjà dans Contacts**, un numéro par ligne.
-
-Exemple :
+TCV Assistant envoie maintenant une simple liste de numéros, **un numéro par ligne**, par exemple :
 
 ```text
-+33782565405
-+33612345678
+0782565405
+0612345678
+0698765432
 ```
 
-La PWA compare ensuite cette liste avec tous les joueurs importés :
+Il ne faut plus convertir l'entrée en dictionnaire.
 
-- numéro présent dans la sortie → `✓ Dans Contacts`
-- numéro absent → `À créer`
+L'objectif est aussi d'éviter la méthode lente qui faisait **une recherche Contacts pour chaque joueur**. Avec 100+ joueurs, cette méthode peut chauffer l'iPhone et devenir instable.
 
-Si aucun numéro n'est trouvé, retourner exactement :
+## Principe
+
+1. Recevoir `Entrée de raccourci` en texte.
+2. Charger les Contacts **une seule fois**.
+3. Récupérer tous leurs numéros de téléphone.
+4. Pour chaque numéro de contact, ne garder que les chiffres.
+5. Comparer ses 9 derniers chiffres avec le texte reçu depuis TCV Assistant.
+6. Si le numéro est présent dans la liste TCV, ajouter une version `0xxxxxxxxx` à la variable `Numéros trouvés`.
+7. À la fin, combiner `Numéros trouvés` avec des sauts de ligne.
+8. Utiliser `Arrêter ce raccourci et produire un résultat`.
+9. Si rien n'a été trouvé, retourner exactement `NONE`.
+
+## Structure conseillée dans Raccourcis
 
 ```text
-NONE
+Entrée de raccourci
+
+Rechercher des contacts
+  → aucun filtre
+  → limite désactivée
+
+Obtenir les détails des contacts
+  → Numéros de téléphone
+
+Répéter avec chaque élément dans Numéros de téléphone
+
+    Remplacer le texte
+      motif : [^0-9]
+      par : [vide]
+      dans : Élément de répétition
+      Expression régulière : activée
+
+    Faire correspondre le texte
+      motif : [0-9]{9}$
+      dans : Texte remplacé
+
+    Si Entrée de raccourci contient Correspondances
+
+        Texte
+          0[Correspondances]
+
+        Ajouter à la variable
+          Numéros trouvés
+
+    Fin de Si
+
+Fin de la récurrence
+
+Si Numéros trouvés a une valeur
+    Combiner Numéros trouvés avec Nouvelle ligne
+    Arrêter ce raccourci et produire un résultat [Texte combiné]
+Sinon
+    Texte NONE
+    Arrêter ce raccourci et produire un résultat [NONE]
+Fin de Si
 ```
 
-## Logique à construire dans Raccourcis
+## Important
 
-1. Nommer le raccourci exactement `TCV - Vérifier contacts`.
-2. Recevoir l'entrée du raccourci en texte.
-3. Convertir l'entrée JSON en liste / dictionnaire.
-4. Répéter pour chaque joueur.
-5. Récupérer la valeur `phone`.
-6. Utiliser **Rechercher des contacts** avec le numéro de téléphone.
-7. Si au moins un contact est trouvé, ajouter le numéro à une variable/liste `Numéros trouvés`.
-8. À la fin :
-   - si la liste est vide, utiliser le texte `NONE` ;
-   - sinon, combiner `Numéros trouvés` avec un saut de ligne.
-9. **Étape indispensable : ajouter l'action `Arrêter ce raccourci et produire un résultat` et lui donner ce texte comme résultat.**
-
-Sans cette dernière action, l'iPhone revient bien vers la PWA mais ne lui transmet rien, ce qui provoque le message « le raccourci n'a retourné aucun résultat ».
-
-## Formats également acceptés
-
-La PWA accepte aussi un JSON de la forme :
-
-```json
-[
-  {"id":"...","exists":true},
-  {"id":"...","exists":false}
-]
-```
-
-ou une liste JSON de numéros.
+- Ne pas utiliser `Obtenir le dictionnaire de Entrée de raccourci` dans cette nouvelle version.
+- Ne pas utiliser `Rechercher des contacts` à l'intérieur de la boucle des joueurs.
+- `Rechercher des contacts` doit être exécuté **une seule fois**.
+- Pour un gros fichier, cette version est beaucoup plus légère car elle parcourt la base Contacts une seule fois au lieu de lancer 100+ recherches séparées.
