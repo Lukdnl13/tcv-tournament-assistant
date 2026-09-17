@@ -1,4 +1,4 @@
-const CACHE = "tcv-assistant-v13-contact-create";
+const CACHE = "tcv-assistant-v14-shortcut-speed";
 const CORE = [
   "./",
   "index.html",
