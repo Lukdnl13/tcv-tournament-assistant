@@ -1,10 +1,11 @@
-const CACHE = "tcv-assistant-v12-contact-fix";
+const CACHE = "tcv-assistant-v13-contact-create";
 const CORE = [
   "./",
   "index.html",
   "styles.css",
   "app.js",
   "contact-phone-fix.js",
+  "contact-create-flow.js",
   "manifest.webmanifest",
   "assets/tcv-logo.png",
   "assets/icons/icon-192.png"
