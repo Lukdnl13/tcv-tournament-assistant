@@ -1,4 +1,4 @@
-const CACHE = "tcv-assistant-v15-return-fix";
+const CACHE = "tcv-assistant-v16-large-contact-batches";
 const CORE = [
   "./",
   "index.html",
@@ -27,14 +27,10 @@ self.addEventListener("activate", event => {
 self.addEventListener("fetch", event => {
   if (event.request.method !== "GET") return;
 
-  // Les retours depuis Raccourcis sont des navigations avec paramètres de requête.
-  // On privilégie le réseau pour éviter qu'une ancienne page/service worker reste bloqué.
   if (event.request.mode === "navigate") {
     const url = new URL(event.request.url);
     const fallback = url.pathname.endsWith("callback.html") ? "callback.html" : "index.html";
-    event.respondWith(
-      fetch(event.request).catch(() => caches.match(fallback))
-    );
+    event.respondWith(fetch(event.request).catch(() => caches.match(fallback)));
     return;
   }
 
