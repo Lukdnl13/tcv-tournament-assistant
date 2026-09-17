@@ -3,7 +3,7 @@
   const VERIFY_STATUS_KEY = 'tcv_verify_status_v1';
   const PENDING_KEY = 'tcv_pending_shortcut_v3';
   const OPEN_DELAY_MS = 60;
-  const STALE_PENDING_MS = 180000; // 3 min : les gros fichiers peuvent demander du temps à Raccourcis
+  const STALE_PENDING_MS = 180000;
   let launching = false;
   let watchdog = null;
 
@@ -20,7 +20,7 @@
 
   function lookupPhone(raw = '') {
     const canonical = normalizePhone(raw);
-    if (/^\+33[67]\d{8}$/.test(canonical)) return '0' + canonical.slice(3);
+    if (/^\+33\d{9}$/.test(canonical)) return '0' + canonical.slice(3);
     return canonical;
   }
 
@@ -49,19 +49,18 @@
     return changed;
   }
 
-  // Payload ultra-léger pour les gros imports : le raccourci actuel n'a besoin que de la clé phone.
-  // Suppression des UUID/prénoms/noms pour éviter les URLs très longues avec 100+ joueurs.
-  function buildVerifyPayload(players) {
-    const payload = {};
+  // Version bulk rapide : une simple ligne par numéro.
+  // Plus de JSON à décoder dans Raccourcis et plus de recherches Contacts joueur par joueur.
+  function buildVerifyText(players) {
     const seen = new Set();
-    let index = 1;
+    const lines = [];
     players.forEach(player => {
-      const canonical = normalizePhone(player.phone);
-      if (!canonical || seen.has(canonical)) return;
-      seen.add(canonical);
-      payload[String(index++)] = { phone: lookupPhone(canonical) };
+      const local = lookupPhone(player.phone);
+      if (!local || seen.has(local)) return;
+      seen.add(local);
+      lines.push(local);
     });
-    return payload;
+    return lines.join('\n');
   }
 
   function getCallbackTarget() {
@@ -93,14 +92,14 @@
     const text = document.getElementById('overlayText');
     const close = document.getElementById('overlayCloseBtn');
     if (title) title.textContent = 'Vérification Contacts…';
-    if (text) text.textContent = `${count} numéro${count > 1 ? 's' : ''} transmis à Raccourcis. Pour un gros fichier, cela peut prendre quelques dizaines de secondes.`;
+    if (text) text.textContent = `${count} numéro${count > 1 ? 's' : ''} envoyé${count > 1 ? 's' : ''} au raccourci rapide.`;
     if (close) close.classList.add('hidden');
     if (overlay) overlay.classList.remove('hidden');
 
     clearTimeout(watchdog);
     watchdog = setTimeout(() => {
       if (document.visibilityState !== 'visible') return;
-      if (text) text.textContent = 'La vérification est toujours en cours. Avec plus de 100 joueurs, laisse Raccourcis terminer puis revenir automatiquement.';
+      if (text) text.textContent = 'Le retour automatique tarde. Tu peux fermer cette fenêtre puis réessayer.';
       if (close) close.classList.remove('hidden');
     }, 15000);
   }
@@ -132,7 +131,6 @@
       return;
     }
 
-    // Ne pas considérer un long traitement comme un échec. On laisse 3 minutes aux gros lots.
     if (Date.now() - Number(pending.at || 0) > STALE_PENDING_MS) {
       localStorage.removeItem(PENDING_KEY);
       hideOverlay();
@@ -151,9 +149,15 @@
     migrateStoredPhones();
     setVerifyButtonsBusy(true);
 
-    const payload = buildVerifyPayload(players);
-    const count = Object.keys(payload).length;
-    setStatus('info', 'Vérification Contacts', `Vérification de ${count} numéro${count > 1 ? 's' : ''}…`);
+    const inputText = buildVerifyText(players);
+    const count = inputText ? inputText.split('\n').length : 0;
+    if (!count) {
+      launching = false;
+      setVerifyButtonsBusy(false);
+      return;
+    }
+
+    setStatus('info', 'Vérification Contacts', `Vérification rapide de ${count} numéro${count > 1 ? 's' : ''}…`);
     localStorage.setItem(PENDING_KEY, JSON.stringify({ tag: 'contacts', at: Date.now(), count }));
     showOverlay(count);
 
@@ -161,7 +165,7 @@
     const success = callbackUrl('contacts');
     const cancel = callbackUrl('contacts-cancel');
     const error = callbackUrl('contacts-error');
-    const url = `shortcuts://x-callback-url/run-shortcut?name=${encodeURIComponent(shortcutName)}&input=text&text=${encodeURIComponent(JSON.stringify(payload))}&x-success=${encodeURIComponent(success)}&x-cancel=${encodeURIComponent(cancel)}&x-error=${encodeURIComponent(error)}`;
+    const url = `shortcuts://x-callback-url/run-shortcut?name=${encodeURIComponent(shortcutName)}&input=text&text=${encodeURIComponent(inputText)}&x-success=${encodeURIComponent(success)}&x-cancel=${encodeURIComponent(cancel)}&x-error=${encodeURIComponent(error)}`;
 
     setTimeout(() => { location.href = url; }, OPEN_DELAY_MS);
   }
