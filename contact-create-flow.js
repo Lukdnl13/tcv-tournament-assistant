@@ -3,6 +3,7 @@
   const STALE_PENDING_MS = 15000;
   let launching = false;
   let watchdog = null;
+  let refreshQueued = false;
 
   function normalizePhone(raw = '') {
     let s = String(raw).trim().replace(/[^\d+]/g, '');
@@ -25,6 +26,20 @@
     catch { return null; }
   }
 
+  function getCallbackTarget() {
+    return /CriOS/i.test(navigator.userAgent) ? 'chrome' : 'web';
+  }
+
+  function callbackUrl(tag) {
+    const base = `${location.origin}${location.pathname.replace(/[^/]*$/, '')}callback.html`;
+    const params = new URLSearchParams({ tag, target: getCallbackTarget() });
+    return `${base}?${params.toString()}`;
+  }
+
+  function setTextIfChanged(element, text) {
+    if (element && element.textContent !== text) element.textContent = text;
+  }
+
   function getAllMissing() {
     const players = window.TCV?.state?.players || [];
     return players.filter(player => player.contactStatus === 'missing' && player.phone);
@@ -41,7 +56,6 @@
     return getAllMissing();
   }
 
-  // On envoie uniquement les champs réellement utiles à la création du contact.
   function buildPayload(players) {
     return players.map(player => ({
       firstName: player.firstName || '',
@@ -57,10 +71,10 @@
       if (busy) {
         if (!button.dataset.originalLabel) button.dataset.originalLabel = button.textContent;
         button.disabled = true;
-        button.textContent = '⏳ Ouverture…';
+        setTextIfChanged(button, '⏳ Ouverture…');
       } else {
         button.disabled = false;
-        if (button.dataset.originalLabel) button.textContent = button.dataset.originalLabel;
+        if (button.dataset.originalLabel) setTextIfChanged(button, button.dataset.originalLabel);
       }
     });
   }
@@ -71,16 +85,16 @@
     const text = document.getElementById('overlayText');
     const close = document.getElementById('overlayCloseBtn');
     if (title) title.textContent = 'Création des contacts…';
-    if (text) text.textContent = `${count} contact${count > 1 ? 's' : ''} à créer. Ouverture de Raccourcis…`;
+    if (text) text.textContent = `${count} contact${count > 1 ? 's' : ''} à créer.`;
     if (close) close.classList.add('hidden');
     if (overlay) overlay.classList.remove('hidden');
 
     clearTimeout(watchdog);
     watchdog = setTimeout(() => {
       if (document.visibilityState !== 'visible') return;
-      if (text) text.textContent = 'Raccourcis met plus de temps que prévu. Tu peux fermer cette fenêtre sans perdre ta liste puis réessayer.';
+      if (text) text.textContent = 'Le retour automatique tarde. Tu peux fermer cette fenêtre puis réessayer.';
       if (close) close.classList.remove('hidden');
-    }, 2500);
+    }, 3000);
   }
 
   function hideOverlay() {
@@ -106,11 +120,12 @@
     showOverlay(missing.length);
 
     const shortcutName = tcv?.state?.settings?.contactsShortcut || 'TCV - Créer contacts';
-    const success = `${location.origin}${location.pathname}?shortcut=${encodeURIComponent('createContacts')}`;
-    const cancel = `${location.origin}${location.pathname}?shortcut=${encodeURIComponent('createContacts-cancel')}`;
-    const url = `shortcuts://x-callback-url/run-shortcut?name=${encodeURIComponent(shortcutName)}&input=text&text=${encodeURIComponent(JSON.stringify(payload))}&x-success=${encodeURIComponent(success)}&x-cancel=${encodeURIComponent(cancel)}`;
+    const success = callbackUrl('createContacts');
+    const cancel = callbackUrl('createContacts-cancel');
+    const error = callbackUrl('createContacts-error');
+    const url = `shortcuts://x-callback-url/run-shortcut?name=${encodeURIComponent(shortcutName)}&input=text&text=${encodeURIComponent(JSON.stringify(payload))}&x-success=${encodeURIComponent(success)}&x-cancel=${encodeURIComponent(cancel)}&x-error=${encodeURIComponent(error)}`;
 
-    setTimeout(() => { location.href = url; }, 80);
+    setTimeout(() => { location.href = url; }, 60);
   }
 
   function recoverOnReturn() {
@@ -125,14 +140,14 @@
       return;
     }
 
-    if (Date.now() - Number(pending.at || 0) > 1200) {
+    if (Date.now() - Number(pending.at || 0) > 1400) {
       setTimeout(() => {
         const again = readPending();
         if (again?.tag === 'createContacts') {
           localStorage.removeItem(PENDING_KEY);
           hideOverlay();
         }
-      }, 300);
+      }, 250);
     }
   }
 
@@ -165,7 +180,11 @@
       button.dataset.action = 'createMissingContacts';
       actions.appendChild(button);
     }
-    if (!launching) button.textContent = `➕ Créer ${missing.length} contact${missing.length > 1 ? 's' : ''} manquant${missing.length > 1 ? 's' : ''}`;
+
+    if (!launching) {
+      const label = `➕ Créer ${missing.length} contact${missing.length > 1 ? 's' : ''} manquant${missing.length > 1 ? 's' : ''}`;
+      setTextIfChanged(button, label);
+    }
 
     if (!document.getElementById('createContactsHint')) {
       const hint = document.createElement('div');
@@ -183,12 +202,24 @@
     if (!button) return;
     const missing = getMissingForCurrentContext();
     button.disabled = !missing.length || launching;
-    if (missing.length && !launching) button.textContent = `📇 Créer ${missing.length} contact${missing.length > 1 ? 's' : ''} manquant${missing.length > 1 ? 's' : ''}`;
+    if (missing.length && !launching) {
+      const label = `📇 Créer ${missing.length} contact${missing.length > 1 ? 's' : ''} manquant${missing.length > 1 ? 's' : ''}`;
+      setTextIfChanged(button, label);
+    }
   }
 
   function refresh() {
     injectPlayersButton();
     fixContactsScreenButton();
+  }
+
+  function scheduleRefresh() {
+    if (refreshQueued) return;
+    refreshQueued = true;
+    requestAnimationFrame(() => {
+      refreshQueued = false;
+      refresh();
+    });
   }
 
   document.addEventListener('click', event => {
@@ -206,13 +237,13 @@
     hideOverlay();
   }, true);
 
-  window.addEventListener('pageshow', () => setTimeout(recoverOnReturn, 120));
-  window.addEventListener('focus', () => setTimeout(recoverOnReturn, 120));
+  window.addEventListener('pageshow', () => setTimeout(recoverOnReturn, 100));
+  window.addEventListener('focus', () => setTimeout(recoverOnReturn, 100));
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') setTimeout(recoverOnReturn, 120);
+    if (document.visibilityState === 'visible') setTimeout(recoverOnReturn, 100);
   });
 
-  const observer = new MutationObserver(() => refresh());
+  const observer = new MutationObserver(scheduleRefresh);
   const view = document.getElementById('view');
   if (view) observer.observe(view, { childList: true, subtree: true });
 
