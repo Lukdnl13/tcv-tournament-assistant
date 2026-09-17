@@ -1,9 +1,10 @@
-const CACHE = "tcv-assistant-v11-redesign";
+const CACHE = "tcv-assistant-v12-contact-fix";
 const CORE = [
   "./",
   "index.html",
   "styles.css",
   "app.js",
+  "contact-phone-fix.js",
   "manifest.webmanifest",
   "assets/tcv-logo.png",
   "assets/icons/icon-192.png"
