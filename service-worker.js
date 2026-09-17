@@ -1,7 +1,8 @@
-const CACHE = "tcv-assistant-v14-shortcut-speed";
+const CACHE = "tcv-assistant-v15-return-fix";
 const CORE = [
   "./",
   "index.html",
+  "callback.html",
   "styles.css",
   "app.js",
   "contact-phone-fix.js",
@@ -25,11 +26,23 @@ self.addEventListener("activate", event => {
 
 self.addEventListener("fetch", event => {
   if (event.request.method !== "GET") return;
+
+  // Les retours depuis Raccourcis sont des navigations avec paramètres de requête.
+  // On privilégie le réseau pour éviter qu'une ancienne page/service worker reste bloqué.
+  if (event.request.mode === "navigate") {
+    const url = new URL(event.request.url);
+    const fallback = url.pathname.endsWith("callback.html") ? "callback.html" : "index.html";
+    event.respondWith(
+      fetch(event.request).catch(() => caches.match(fallback))
+    );
+    return;
+  }
+
   event.respondWith(
     caches.match(event.request).then(cached => cached || fetch(event.request).then(response => {
       const copy = response.clone();
       caches.open(CACHE).then(cache => cache.put(event.request, copy));
       return response;
-    }).catch(() => caches.match("index.html")))
+    }))
   );
 });
