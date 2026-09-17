@@ -21,28 +21,108 @@
   <main class="card">
     <div class="spinner"></div>
     <h1>Retour vers TCV Assistant…</h1>
-    <p id="status">La vérification est terminée. Retour à l’application en cours.</p>
+    <p id="status">Traitement du résultat en cours.</p>
     <a id="fallback" href="./" hidden>Ouvrir TCV Assistant</a>
   </main>
   <script>
     (() => {
+      const PLAYERS_KEY = 'tcv_players_v1';
+      const STATUS_KEY = 'tcv_verify_status_v1';
+      const PENDING_KEY = 'tcv_pending_shortcut_v3';
+
+      function normalizePhone(raw = '') {
+        let s = String(raw).trim().replace(/[^\d+]/g, '');
+        if (!s) return '';
+        if (s.startsWith('0033')) s = '+33' + s.slice(4);
+        if (/^33\d+$/.test(s)) s = '+' + s;
+        if (/^[67]\d{8}$/.test(s)) s = '+33' + s;
+        if (/^0\d{9}$/.test(s)) s = '+33' + s.slice(1);
+        return s;
+      }
+
+      function readJson(key, fallback) {
+        try {
+          const raw = localStorage.getItem(key);
+          return raw ? JSON.parse(raw) : fallback;
+        } catch {
+          return fallback;
+        }
+      }
+
+      function saveStatus(type, message) {
+        localStorage.setItem(STATUS_KEY, JSON.stringify({
+          type,
+          title: 'Vérification Contacts',
+          message
+        }));
+      }
+
       const params = new URLSearchParams(location.search);
       const tag = params.get('tag') || 'contacts';
       const target = params.get('target') || 'web';
-      const result = params.get('result') || params.get('output') || params.get('shortcutOutput') || params.get('text') || '';
-      const basePath = location.pathname.replace(/callback\.html$/, '');
-      const query = new URLSearchParams({ shortcut: tag });
-      if (result) query.set('result', result);
-      const webUrl = `${location.origin}${basePath}?${query.toString()}`;
-      const chromeUrl = `googlechromes://${location.host}${basePath}?${query.toString()}`;
-      const destination = target === 'chrome' ? chromeUrl : webUrl;
+      const result = (params.get('result') || params.get('output') || params.get('shortcutOutput') || params.get('text') || '').trim();
+      const statusEl = document.getElementById('status');
       const fallback = document.getElementById('fallback');
+      const pending = readJson(PENDING_KEY, null);
+      const players = readJson(PLAYERS_KEY, []);
+
+      let found = 0;
+      let missing = 0;
+
+      if (tag === 'contacts-cancel') {
+        saveStatus('warn', 'La vérification a été annulée. Aucun statut joueur n’a été modifié.');
+      } else if (tag === 'contacts-error') {
+        saveStatus('warn', 'Le raccourci a rencontré une erreur. Aucun statut joueur n’a été modifié.');
+      } else if (tag === 'contacts') {
+        if (!pending || !Array.isArray(pending.phones)) {
+          saveStatus('warn', 'Le résultat a été reçu, mais la liste en attente n’a pas été retrouvée. Relance la vérification.');
+        } else {
+          let foundPhones = new Set();
+
+          if (/^IDX:/i.test(result)) {
+            const indices = result.slice(4)
+              .split(/[\s,;|]+/)
+              .map(v => parseInt(v, 10))
+              .filter(v => Number.isFinite(v) && v >= 1 && v <= pending.phones.length);
+            foundPhones = new Set(indices.map(i => normalizePhone(pending.phones[i - 1])).filter(Boolean));
+          } else if (!result || result.toUpperCase() === 'NONE') {
+            foundPhones = new Set();
+          } else {
+            // Compatibilité avec l'ancien raccourci qui renvoyait les numéros eux-mêmes.
+            foundPhones = new Set(
+              result.split(/[\n,;|]+/).map(normalizePhone).filter(Boolean)
+            );
+          }
+
+          const pendingPhones = new Set(pending.phones.map(normalizePhone).filter(Boolean));
+          players.forEach(player => {
+            const phone = normalizePhone(player.phone);
+            if (!phone || !pendingPhones.has(phone)) return;
+            const exists = foundPhones.has(phone);
+            player.contactStatus = exists ? 'exists' : 'missing';
+            exists ? found++ : missing++;
+          });
+
+          localStorage.setItem(PLAYERS_KEY, JSON.stringify(players));
+          saveStatus('success', `Vérification terminée : ${found} contact(s) trouvé(s), ${missing} à créer.`);
+          statusEl.textContent = `Terminé : ${found} trouvé(s), ${missing} à créer.`;
+        }
+      }
+
+      localStorage.removeItem(PENDING_KEY);
+
+      const basePath = location.pathname.replace(/callback\.html$/, '');
+      const webUrl = `${location.origin}${basePath}?shortcut=verify-done`;
+      const chromeUrl = `googlechromes://${location.host}${basePath}?shortcut=verify-done`;
+      const destination = target === 'chrome' ? chromeUrl : webUrl;
       fallback.href = destination;
 
-      setTimeout(() => { location.replace(destination); }, 80);
+      setTimeout(() => { location.replace(destination); }, 350);
       setTimeout(() => {
-        document.getElementById('status').textContent = 'Le retour automatique prend un peu de temps. Tu peux ouvrir l’application manuellement.';
         fallback.hidden = false;
+        if (!statusEl.textContent.startsWith('Terminé')) {
+          statusEl.textContent = 'Le retour automatique prend un peu de temps. Tu peux ouvrir TCV Assistant manuellement.';
+        }
       }, 1800);
     })();
   </script>
