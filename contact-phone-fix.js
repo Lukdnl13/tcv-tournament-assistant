@@ -49,18 +49,24 @@
     return changed;
   }
 
-  // Version bulk rapide : une simple ligne par numéro.
-  // Plus de JSON à décoder dans Raccourcis et plus de recherches Contacts joueur par joueur.
-  function buildVerifyText(players) {
+  // Une ligne par numéro pour garder l'entrée Shortcuts légère.
+  // On mémorise localement le même ordre afin que le raccourci puisse renvoyer
+  // uniquement les INDEX trouvés (ex: IDX:1,4,7), beaucoup plus compacts que 115 numéros.
+  function buildVerifyData(players) {
     const seen = new Set();
     const lines = [];
+    const phones = [];
+
     players.forEach(player => {
-      const local = lookupPhone(player.phone);
-      if (!local || seen.has(local)) return;
+      const canonical = normalizePhone(player.phone);
+      const local = lookupPhone(canonical);
+      if (!canonical || !local || seen.has(local)) return;
       seen.add(local);
       lines.push(local);
+      phones.push(canonical);
     });
-    return lines.join('\n');
+
+    return { text: lines.join('\n'), phones };
   }
 
   function getCallbackTarget() {
@@ -81,7 +87,9 @@
         if (button.textContent !== '⏳ Vérification…') button.textContent = '⏳ Vérification…';
       } else {
         button.disabled = false;
-        if (button.dataset.originalLabel && button.textContent !== button.dataset.originalLabel) button.textContent = button.dataset.originalLabel;
+        if (button.dataset.originalLabel && button.textContent !== button.dataset.originalLabel) {
+          button.textContent = button.dataset.originalLabel;
+        }
       }
     });
   }
@@ -92,14 +100,14 @@
     const text = document.getElementById('overlayText');
     const close = document.getElementById('overlayCloseBtn');
     if (title) title.textContent = 'Vérification Contacts…';
-    if (text) text.textContent = `${count} numéro${count > 1 ? 's' : ''} envoyé${count > 1 ? 's' : ''} au raccourci rapide.`;
+    if (text) text.textContent = `${count} numéro${count > 1 ? 's' : ''} envoyé${count > 1 ? 's' : ''} au raccourci.`;
     if (close) close.classList.add('hidden');
     if (overlay) overlay.classList.remove('hidden');
 
     clearTimeout(watchdog);
     watchdog = setTimeout(() => {
       if (document.visibilityState !== 'visible') return;
-      if (text) text.textContent = 'Le retour automatique tarde. Tu peux fermer cette fenêtre puis réessayer.';
+      if (text) text.textContent = 'La vérification est encore en cours. Pour une grosse liste, cela peut prendre un moment.';
       if (close) close.classList.remove('hidden');
     }, 15000);
   }
@@ -149,23 +157,28 @@
     migrateStoredPhones();
     setVerifyButtonsBusy(true);
 
-    const inputText = buildVerifyText(players);
-    const count = inputText ? inputText.split('\n').length : 0;
+    const data = buildVerifyData(players);
+    const count = data.phones.length;
     if (!count) {
       launching = false;
       setVerifyButtonsBusy(false);
       return;
     }
 
-    setStatus('info', 'Vérification Contacts', `Vérification rapide de ${count} numéro${count > 1 ? 's' : ''}…`);
-    localStorage.setItem(PENDING_KEY, JSON.stringify({ tag: 'contacts', at: Date.now(), count }));
+    setStatus('info', 'Vérification Contacts', `Vérification de ${count} numéro${count > 1 ? 's' : ''}…`);
+    localStorage.setItem(PENDING_KEY, JSON.stringify({
+      tag: 'contacts',
+      at: Date.now(),
+      count,
+      phones: data.phones
+    }));
     showOverlay(count);
 
     const shortcutName = tcv.state.settings?.verifyShortcut || 'TCV - Vérifier contacts';
     const success = callbackUrl('contacts');
     const cancel = callbackUrl('contacts-cancel');
     const error = callbackUrl('contacts-error');
-    const url = `shortcuts://x-callback-url/run-shortcut?name=${encodeURIComponent(shortcutName)}&input=text&text=${encodeURIComponent(inputText)}&x-success=${encodeURIComponent(success)}&x-cancel=${encodeURIComponent(cancel)}&x-error=${encodeURIComponent(error)}`;
+    const url = `shortcuts://x-callback-url/run-shortcut?name=${encodeURIComponent(shortcutName)}&input=text&text=${encodeURIComponent(data.text)}&x-success=${encodeURIComponent(success)}&x-cancel=${encodeURIComponent(cancel)}&x-error=${encodeURIComponent(error)}`;
 
     setTimeout(() => { location.href = url; }, OPEN_DELAY_MS);
   }
