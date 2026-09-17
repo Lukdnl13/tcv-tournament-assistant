@@ -2,7 +2,7 @@
   const PLAYERS_KEY = 'tcv_players_v1';
   const VERIFY_STATUS_KEY = 'tcv_verify_status_v1';
   const PENDING_KEY = 'tcv_pending_shortcut_v3';
-  const OPEN_DELAY_MS = 80;
+  const OPEN_DELAY_MS = 60;
   const STALE_PENDING_MS = 12000;
   let launching = false;
   let watchdog = null;
@@ -49,8 +49,6 @@
     return changed;
   }
 
-  // Payload volontairement minimal : le raccourci n'a besoin que de l'id et du téléphone.
-  // Cela réduit le texte envoyé à Raccourcis et accélère le décodage JSON.
   function buildVerifyPayload(players) {
     const payload = {};
     const seen = new Set();
@@ -59,12 +57,19 @@
       const canonical = normalizePhone(player.phone);
       if (!canonical || seen.has(`${player.id}|${canonical}`)) return;
       seen.add(`${player.id}|${canonical}`);
-      payload[String(index++)] = {
-        id: player.id,
-        phone: lookupPhone(canonical)
-      };
+      payload[String(index++)] = { id: player.id, phone: lookupPhone(canonical) };
     });
     return payload;
+  }
+
+  function getCallbackTarget() {
+    return /CriOS/i.test(navigator.userAgent) ? 'chrome' : 'web';
+  }
+
+  function callbackUrl(tag) {
+    const base = `${location.origin}${location.pathname.replace(/[^/]*$/, '')}callback.html`;
+    const params = new URLSearchParams({ tag, target: getCallbackTarget() });
+    return `${base}?${params.toString()}`;
   }
 
   function setVerifyButtonsBusy(busy) {
@@ -72,10 +77,12 @@
       if (busy) {
         if (!button.dataset.originalLabel) button.dataset.originalLabel = button.textContent;
         button.disabled = true;
-        button.textContent = '⏳ Ouverture…';
+        if (button.textContent !== '⏳ Ouverture…') button.textContent = '⏳ Ouverture…';
       } else {
         button.disabled = false;
-        if (button.dataset.originalLabel) button.textContent = button.dataset.originalLabel;
+        if (button.dataset.originalLabel && button.textContent !== button.dataset.originalLabel) {
+          button.textContent = button.dataset.originalLabel;
+        }
       }
     });
   }
@@ -86,22 +93,21 @@
     const text = document.getElementById('overlayText');
     const close = document.getElementById('overlayCloseBtn');
     if (title) title.textContent = 'Vérification Contacts…';
-    if (text) text.textContent = `${count} joueur${count > 1 ? 's' : ''} transmis à Raccourcis. Ouverture en cours…`;
+    if (text) text.textContent = `${count} joueur${count > 1 ? 's' : ''} transmis à Raccourcis.`;
     if (close) close.classList.add('hidden');
     if (overlay) overlay.classList.remove('hidden');
 
     clearTimeout(watchdog);
     watchdog = setTimeout(() => {
       if (document.visibilityState !== 'visible') return;
-      if (text) text.textContent = 'Raccourcis met plus de temps que prévu. Tu peux fermer cette fenêtre et réessayer : l’application ne restera plus bloquée.';
+      if (text) text.textContent = 'Le retour automatique tarde. Tu peux fermer cette fenêtre puis relancer la vérification.';
       if (close) close.classList.remove('hidden');
-    }, 2500);
+    }, 3000);
   }
 
   function hideOverlay() {
     clearTimeout(watchdog);
-    const overlay = document.getElementById('shortcutOverlay');
-    if (overlay) overlay.classList.add('hidden');
+    document.getElementById('shortcutOverlay')?.classList.add('hidden');
     setVerifyButtonsBusy(false);
     launching = false;
   }
@@ -112,13 +118,13 @@
     if (Date.now() - Number(pending.at || 0) < STALE_PENDING_MS) return;
     localStorage.removeItem(PENDING_KEY);
     hideOverlay();
-    setStatus('warn', 'Vérification Contacts', 'La vérification précédente n’a pas renvoyé de résultat. Rien n’a été modifié : tu peux simplement relancer le bouton.');
+    setStatus('warn', 'Vérification Contacts', 'La vérification précédente n’a pas renvoyé de résultat. Rien n’a été modifié.');
   }
 
   function recoverWhenReturning() {
     if (document.visibilityState !== 'visible') return;
     const params = new URLSearchParams(location.search);
-    if (params.get('shortcut') === 'contacts') return; // app.js traite le vrai callback.
+    if (params.get('shortcut') === 'contacts') return;
 
     const pending = readPending();
     if (!pending || pending.tag !== 'contacts') {
@@ -126,8 +132,7 @@
       return;
     }
 
-    // Si on revient manuellement depuis Raccourcis sans callback, on ne laisse pas tourner le spinner.
-    if (Date.now() - Number(pending.at || 0) > 1200) {
+    if (Date.now() - Number(pending.at || 0) > 1400) {
       setTimeout(() => {
         const nowPending = readPending();
         const nowParams = new URLSearchParams(location.search);
@@ -135,10 +140,10 @@
         if (nowPending?.tag === 'contacts') {
           localStorage.removeItem(PENDING_KEY);
           hideOverlay();
-          setStatus('warn', 'Vérification Contacts', 'Retour détecté sans résultat. Le raccourci a peut-être été interrompu ; relance la vérification si les statuts n’ont pas changé.');
+          setStatus('warn', 'Vérification Contacts', 'Retour détecté sans résultat. Tu peux relancer la vérification.');
           if (window.TCV?.state?.route === 'players') window.TCV.route('players');
         }
-      }, 350);
+      }, 250);
     }
   }
 
@@ -159,9 +164,10 @@
     showOverlay(count);
 
     const shortcutName = tcv.state.settings?.verifyShortcut || 'TCV - Vérifier contacts';
-    const success = `${location.origin}${location.pathname}?shortcut=${encodeURIComponent('contacts')}`;
-    const cancel = `${location.origin}${location.pathname}?shortcut=${encodeURIComponent('contacts-cancel')}`;
-    const url = `shortcuts://x-callback-url/run-shortcut?name=${encodeURIComponent(shortcutName)}&input=text&text=${encodeURIComponent(JSON.stringify(payload))}&x-success=${encodeURIComponent(success)}&x-cancel=${encodeURIComponent(cancel)}`;
+    const success = callbackUrl('contacts');
+    const cancel = callbackUrl('contacts-cancel');
+    const error = callbackUrl('contacts-error');
+    const url = `shortcuts://x-callback-url/run-shortcut?name=${encodeURIComponent(shortcutName)}&input=text&text=${encodeURIComponent(JSON.stringify(payload))}&x-success=${encodeURIComponent(success)}&x-cancel=${encodeURIComponent(cancel)}&x-error=${encodeURIComponent(error)}`;
 
     setTimeout(() => { location.href = url; }, OPEN_DELAY_MS);
   }
@@ -175,17 +181,16 @@
     launchVerification();
   }, true);
 
-  // Le bouton Fermer de l'overlay doit réellement débloquer l'interface.
   document.getElementById('overlayCloseBtn')?.addEventListener('click', () => {
     const pending = readPending();
     if (pending?.tag === 'contacts') localStorage.removeItem(PENDING_KEY);
     hideOverlay();
   }, true);
 
-  window.addEventListener('pageshow', () => setTimeout(recoverWhenReturning, 120));
-  window.addEventListener('focus', () => setTimeout(recoverWhenReturning, 120));
+  window.addEventListener('pageshow', () => setTimeout(recoverWhenReturning, 100));
+  window.addEventListener('focus', () => setTimeout(recoverWhenReturning, 100));
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') setTimeout(recoverWhenReturning, 120);
+    if (document.visibilityState === 'visible') setTimeout(recoverWhenReturning, 100);
   });
 
   const changed = migrateStoredPhones();
