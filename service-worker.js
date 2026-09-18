@@ -1,12 +1,11 @@
-const CACHE = "tcv-assistant-v19-indexed-contact-result";
+const CACHE = "tcv-assistant-v20-vcf-local";
 const CORE = [
   "./",
   "index.html",
   "callback.html",
   "styles.css",
   "app.js",
-  "contact-phone-fix.js",
-  "contact-create-flow.js",
+  "contacts-vcf-local.js",
   "manifest.webmanifest",
   "assets/tcv-logo.png",
   "assets/icons/icon-192.png"
@@ -35,10 +34,12 @@ self.addEventListener("fetch", event => {
   }
 
   event.respondWith(
-    caches.match(event.request).then(cached => cached || fetch(event.request).then(response => {
-      const copy = response.clone();
-      caches.open(CACHE).then(cache => cache.put(event.request, copy));
-      return response;
-    }))
+    fetch(event.request)
+      .then(response => {
+        const copy = response.clone();
+        caches.open(CACHE).then(cache => cache.put(event.request, copy));
+        return response;
+      })
+      .catch(() => caches.match(event.request))
   );
 });
